@@ -12,4 +12,17 @@ export interface Message {
     text: string;
     isUser: boolean;
     timestamp: Date;
+    hasArtifact?: boolean;
+    artifactType?: 'code' | 'document' | 'image' | 'chart';
+    artifactContent?: string;
+    artifactLanguage?: string;
+}
+
+export interface Artifact {
+    id: string;
+    type: 'code' | 'document' | 'image' | 'chart';
+    title: string;
+    content: string;
+    language?: string;
+    messageId: string;
 }
