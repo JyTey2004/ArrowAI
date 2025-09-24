@@ -4,19 +4,26 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import time
 
+
 from app.core.config import settings
 from app.core.version import VERSION
 from app.api.routes.health import router as health_router
+from app.core.logging import setup_logging
+
+
 # # Stubs you’ll flesh out:
 # from app.api.routes.run import router as run_router
-# from app.api.routes.sandbox import router as sandbox_router
+from app.api.routes.sandbox import router as sandbox_router
+from app.api.routes.artifacts import router as artifacts_router
+from app.api.routes.ws import router as ws_router
 # from app.api.routes.tmp import router as tmp_router
 # from app.api.routes.cel import router as cel_router
 
+setup_logging() 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Startup   
     app.state.start_time = time.time()
     yield
     # Shutdown (noop for now)
@@ -43,7 +50,10 @@ def create_app() -> FastAPI:
     # Routers
     app.include_router(health_router, tags=["health"])
     # app.include_router(run_router, prefix="/run", tags=["run"])
-    # app.include_router(sandbox_router, prefix="/sandbox", tags=["sandbox"])
+    app.include_router(sandbox_router, prefix="/sandbox", tags=["sandbox"])
+    app.include_router(artifacts_router, prefix="/artifacts", tags=["artifacts"])
+    app.include_router(ws_router, tags=["assistant"])
+
     # app.include_router(tmp_router, prefix="/tmp", tags=["tmp"])
     # app.include_router(cel_router, prefix="/cel", tags=["cel"])
 

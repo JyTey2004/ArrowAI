@@ -26,4 +26,22 @@ export const lightTheme: Theme = {
   glassBorder: 'rgba(59, 130, 246, 0.2)',
   glassHover: 'rgba(59, 130, 246, 0.1)',
   glassActive: 'rgba(59, 130, 246, 0.15)',
+
+  // success system
+  success: '#22c55e',
+  successHover: '#16a34a',
+  successLight: '#166534',
+  successDark: '#15803d',
+
+  // warning system
+  warning: '#eab308',
+  warningHover: '#ca8a04',
+  warningLight: '#fbbf24',
+  warningDark: '#b45309',
+
+  // error system
+  error: '#ef4444',
+  errorHover: '#dc2626',
+  errorLight: '#b91c1c',
+  errorDark: '#991b1b',
 };

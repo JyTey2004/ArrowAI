@@ -28,5 +28,23 @@ declare module 'styled-components' {
         glassBorder: string;
         glassHover: string;
         glassActive: string;
+
+        // success system
+        success: string;
+        successHover: string;
+        successLight: string;
+        successDark: string;
+
+        // warning system
+        warning: string;
+        warningHover: string;
+        warningLight: string;
+        warningDark: string;
+
+        // error system
+        error: string;
+        errorHover: string;
+        errorLight: string;
+        errorDark: string;
     }
 }

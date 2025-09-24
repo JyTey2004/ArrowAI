@@ -1,10 +1,12 @@
 // src/components/chat/ChatInterface.tsx
 import React, { useState, useRef, useEffect } from 'react';
 import styled from 'styled-components';
-import { Send, Code2, FileText, BarChart, Maximize2, Minimize2 } from 'lucide-react';
+import { Send, Code2, FileText, BarChart, Maximize2, Minimize2, AlertCircle, Paperclip, X } from 'lucide-react';
 import { useChat } from '../../contexts/ChatContext';
 import { MessageBubble } from './MessageBubble';
 import { ArtifactPanel } from './ArtifactPanel';
+import { FileUpload } from './FileUpload';
+import { ExecutionStatus } from './ExecutionStatus';
 
 const ChatContainer = styled.div<{ $hasArtifact: boolean }>`
   display: flex;
@@ -28,9 +30,7 @@ const ChatHeader = styled.div`
   background: ${props => props.theme.glassBackground};
   backdrop-filter: blur(8px);
   display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   position: relative;
   
   &::after {
@@ -48,13 +48,20 @@ const ChatHeader = styled.div`
   }
 `;
 
+const HeaderTop = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+`;
+
 const ChatTitle = styled.div`
   h1 {
     font-size: 18px;
-    font-weight: 600;\
+    font-weight: 600;
     line-height: 1.2;
     color: ${props => props.theme.textPrimary};
-    margin: 0 0 0 0;
+    margin: 0;
   }
 `;
 
@@ -84,6 +91,43 @@ const ActionButton = styled.button<{ $isActive?: boolean }>`
   }
 `;
 
+const StatusBar = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: ${props => props.theme.textSecondary};
+`;
+
+const ConnectionStatus = styled.div<{ $status: string }>`
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  
+  &::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: ${props => {
+    switch (props.$status) {
+      case 'connected': return '#22c55e';
+      case 'connecting': return '#f59e0b';
+      case 'error': return '#ef4444';
+      default: return '#6b7280';
+    }
+  }};
+  }
+`;
+
+const CurrentNode = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: ${props => props.theme.accent};
+  font-weight: 500;
+`;
+
 const MessagesContainer = styled.div`
   flex: 1;
   overflow-y: auto;
@@ -103,11 +147,97 @@ const MessagesContainer = styled.div`
   }
 `;
 
+const FinalMessageContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+`;
+
+const ArtifactsList = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+`;
+
+const ArtifactPreview = styled.div`
+  background: ${props => props.theme.glassBackground};
+  border: 1px solid ${props => props.theme.glassBorder};
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    background: ${props => props.theme.glassHover};
+    border-color: ${props => props.theme.accent}60;
+    transform: translateY(-1px);
+  }
+`;
+
+const ArtifactHeader = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+`;
+
+const ArtifactIcon = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: ${props => props.theme.accent};
+`;
+
+const ArtifactTitle = styled.div`
+  font-size: 13px;
+  font-weight: 600;
+  color: ${props => props.theme.textPrimary};
+  flex: 1;
+`;
+
+const ArtifactMeta = styled.div`
+  font-size: 11px;
+  color: ${props => props.theme.textSecondary};
+`;
+
 const InputContainer = styled.div`
   padding: 20px 24px;
   border-top: 1px solid ${props => props.theme.glassBorder};
   background: ${props => props.theme.glassBackground};
   backdrop-filter: blur(8px);
+`;
+
+const ClarificationBox = styled.div`
+  background: ${props => props.theme.glassBackground};
+  border: 1px solid ${props => props.theme.accent}40;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+  
+  h4 {
+    color: ${props => props.theme.accent};
+    margin: 0 0 8px 0;
+    font-size: 14px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  
+  p {
+    margin: 0;
+    color: ${props => props.theme.textSecondary};
+    font-size: 14px;
+    line-height: 1.4;
+  }
+`;
+
+const FileUploadSection = styled.div<{ $isVisible: boolean }>`
+  max-height: ${props => props.$isVisible ? '300px' : '0'};
+  opacity: ${props => props.$isVisible ? 1 : 0};
+  overflow: hidden;
+  transition: all 0.3s ease;
+  margin-bottom: ${props => props.$isVisible ? '16px' : '0'};
 `;
 
 const InputWrapper = styled.div`
@@ -118,8 +248,15 @@ const InputWrapper = styled.div`
   margin: 0 auto;
 `;
 
-const TextInput = styled.textarea`
+const InputSection = styled.div`
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+`;
+
+const TextInput = styled.textarea`
+  width: 100%;
   min-height: 44px;
   max-height: 120px;
   padding: 12px 16px;
@@ -142,6 +279,54 @@ const TextInput = styled.textarea`
   &::placeholder {
     color: ${props => props.theme.textSecondary};
   }
+  
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+`;
+
+const InputActions = styled.div`
+  display: flex;
+  gap: 8px;
+  align-items: center;
+`;
+
+const FileButton = styled.button<{ $hasFiles: boolean }>`
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: ${props => props.$hasFiles ? props.theme.accent : props.theme.glassBackground};
+  border: 1px solid ${props => props.$hasFiles ? props.theme.accent : props.theme.glassBorder};
+  color: ${props => props.$hasFiles ? 'white' : props.theme.textSecondary};
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  
+  &:hover {
+    border-color: ${props => props.theme.accent};
+    background: ${props => props.$hasFiles ? props.theme.accentHover : props.theme.accent}20;
+    transform: translateY(-1px);
+  }
+`;
+
+const FileCount = styled.div`
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: ${props => props.theme.accent};
+  color: white;
+  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 `;
 
 const SendButton = styled.button<{ $canSend: boolean }>`
@@ -214,21 +399,46 @@ const TypingIndicator = styled.div`
   }
 `;
 
+const ErrorMessage = styled.div`
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+`;
+
+
 export const ChatInterface: React.FC = () => {
   const {
     activeChat,
     chats,
     messages,
-    addMessage,
     isLoading,
-    setIsLoading,
     activeArtifact,
     setActiveArtifact,
-    artifacts
+    artifacts,
+    sendMessage,
+    isConnected,
+    connectionStatus,
+    currentNode,
+    clarificationQuestion,
+    sendClarification,
+    executionStep,
+    fileUploads,
+    clearCompletedUploads,
   } = useChat();
 
   const [inputValue, setInputValue] = useState('');
   const [isArtifactExpanded, setIsArtifactExpanded] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [showFileUpload, setShowFileUpload] = useState(false);
+  const [expandedExecutions, setExpandedExecutions] = useState<Set<string>>(new Set());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -236,18 +446,77 @@ export const ChatInterface: React.FC = () => {
   const hasArtifact = activeArtifact !== null;
   const currentArtifact = artifacts.find(a => a.id === activeArtifact);
 
+  // Group messages into execution groups
+  const groupedMessages = React.useMemo(() => {
+    const groups: Array<{
+      id: string;
+      userMessage?: typeof messages[0];
+      executionSteps: Array<typeof messages[0]>;
+      finalMessage?: typeof messages[0];
+      artifacts: typeof artifacts;
+    }> = [];
+
+    let currentGroup: typeof groups[0] | null = null;
+
+    messages.forEach((message) => {
+      if (message.isUser) {
+        // Start new group
+        if (currentGroup) {
+          groups.push(currentGroup);
+        }
+        currentGroup = {
+          id: `group-${message.id}`,
+          userMessage: message,
+          executionSteps: [],
+          finalMessage: undefined,
+          artifacts: [],
+        };
+      } else if (currentGroup) {
+        // Check if this is an execution step or final message
+        const isExecutionStep = message.text.includes('✅ **Output:**') ||
+          message.text.includes('❌ **Error:**') ||
+          message.text.includes('💻 **Code Generated:**') ||
+          message.text.includes('📋 **Todo List Generated:**') ||
+          message.text.includes('📎 **Artifact');
+
+        if (isExecutionStep) {
+          currentGroup.executionSteps.push(message);
+        } else {
+          // This is the final message
+          currentGroup.finalMessage = message;
+          // Find artifacts related to this group
+          currentGroup.artifacts = artifacts.filter(a =>
+            currentGroup!.executionSteps.some(step => step.id === a.messageId) ||
+            a.messageId === message.id
+          );
+        }
+      }
+    });
+
+    if (currentGroup) {
+      groups.push(currentGroup);
+    }
+
+    return groups;
+  }, [messages, artifacts]);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [groupedMessages]);
+
+  useEffect(() => {
+    if (connectionStatus === 'connected') {
+      setSendError(null);
+    }
+  }, [connectionStatus]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInputValue(e.target.value);
 
-    // Auto-resize textarea
     if (inputRef.current) {
       inputRef.current.style.height = 'auto';
       inputRef.current.style.height = `${inputRef.current.scrollHeight}px`;
@@ -255,65 +524,34 @@ export const ChatInterface: React.FC = () => {
   };
 
   const handleSendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return;
+    if ((!inputValue.trim() && selectedFiles.length === 0) || isLoading || !isConnected) return;
 
-    const userMessageText = inputValue.trim();
+    const userMessageText = inputValue.trim() || 'File upload';
+    const filesToSend = [...selectedFiles];
+
     setInputValue('');
-    setIsLoading(true);
+    setSelectedFiles([]);
+    setShowFileUpload(false);
+    setSendError(null);
 
-    // Reset textarea height
     if (inputRef.current) {
       inputRef.current.style.height = 'auto';
     }
 
-    // Add user message
-    addMessage({
-      text: userMessageText,
-      isUser: true,
-    });
+    try {
+      if (clarificationQuestion) {
+        await sendClarification(userMessageText);
+      } else {
+        await sendMessage(userMessageText, filesToSend);
+      }
 
-    // Simulate AI response
-    setTimeout(() => {
-      const responses = [
-        {
-          text: `I understand you're asking about "${userMessageText}". Let me help you with that.`,
-          hasArtifact: Math.random() > 0.6,
-        },
-        {
-          text: `That's a great question about "${userMessageText}". Here's what I can tell you:`,
-          hasArtifact: Math.random() > 0.7,
-        },
-        {
-          text: `I'll help you with "${userMessageText}". Let me create something for you.`,
-          hasArtifact: Math.random() > 0.4,
-        },
-      ];
-
-      const randomResponse = responses[Math.floor(Math.random() * responses.length)];
-
-      addMessage({
-        text: randomResponse.text,
-        isUser: false,
-        hasArtifact: randomResponse.hasArtifact,
-        artifactType: randomResponse.hasArtifact ? 'code' : undefined,
-        artifactContent: randomResponse.hasArtifact ? `// Sample code for: ${userMessageText}
-import React from 'react';
-
-const ExampleComponent: React.FC = () => {
-  return (
-    <div>
-      <h2>Sample Component</h2>
-      <p>This is related to: ${userMessageText}</p>
-    </div>
-  );
-};
-
-export default ExampleComponent;` : undefined,
-        artifactLanguage: randomResponse.hasArtifact ? 'typescript' : undefined,
-      });
-
-      setIsLoading(false);
-    }, 1000 + Math.random() * 2000);
+      setTimeout(() => clearCompletedUploads(), 2000);
+    } catch (error) {
+      console.error('Failed to send message:', error);
+      setSendError(error instanceof Error ? error.message : 'Failed to send message');
+      setInputValue(userMessageText === 'File upload' ? '' : userMessageText);
+      setSelectedFiles(filesToSend);
+    }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -323,68 +561,174 @@ export default ExampleComponent;` : undefined,
     }
   };
 
+  const toggleExecutionExpanded = (groupId: string) => {
+    const newExpanded = new Set(expandedExecutions);
+    if (newExpanded.has(groupId)) {
+      newExpanded.delete(groupId);
+    } else {
+      newExpanded.add(groupId);
+    }
+    setExpandedExecutions(newExpanded);
+  };
+
   const toggleArtifactView = () => {
     if (hasArtifact) {
       setActiveArtifact(null);
     }
   };
 
-  const canSend = inputValue.trim().length > 0 && !isLoading;
+  const toggleFileUpload = () => {
+    setShowFileUpload(!showFileUpload);
+  };
+
+  const canSend = (inputValue.trim().length > 0 || selectedFiles.length > 0) && !isLoading && isConnected;
+
+  const getConnectionStatusText = () => {
+    switch (connectionStatus) {
+      case 'connected': return 'Connected';
+      case 'connecting': return 'Connecting...';
+      case 'error': return 'Connection error';
+      default: return 'Disconnected';
+    }
+  };
+
+  const getInputPlaceholder = () => {
+    if (!isConnected) return 'Connecting to AI service...';
+    if (clarificationQuestion) return 'Please provide clarification...';
+    if (isLoading) return 'AI is thinking...';
+    if (selectedFiles.length > 0) return 'Add a message about these files (optional)...';
+    return 'Type your message here... (Shift+Enter for new line)';
+  };
+
+  const getArtifactIcon = (type: string) => {
+    switch (type) {
+      case 'code': return <Code2 size={16} />;
+      case 'document': return <FileText size={16} />;
+      case 'chart': return <BarChart size={16} />;
+      default: return <Code2 size={16} />;
+    }
+  };
 
   return (
     <ChatContainer $hasArtifact={hasArtifact && !isArtifactExpanded}>
       <ChatPanel $hasArtifact={hasArtifact && !isArtifactExpanded}>
         <ChatHeader>
-          <ChatTitle>
-            <h1>{activeChatData?.title || 'New Chat'}</h1>
-          </ChatTitle>
+          <HeaderTop>
+            <ChatTitle>
+              <h1>{activeChatData?.title || 'New Chat'}</h1>
+            </ChatTitle>
 
-          <ChatActions>
-            {hasArtifact && (
-              <>
-                <ActionButton
-                  onClick={() => setIsArtifactExpanded(!isArtifactExpanded)}
-                  title={isArtifactExpanded ? 'Split View' : 'Full Screen'}
-                >
-                  {isArtifactExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-                </ActionButton>
-                <ActionButton
-                  onClick={toggleArtifactView}
-                  $isActive={hasArtifact}
-                  title="Toggle Artifact"
-                >
-                  {currentArtifact?.type === 'code' && <Code2 size={16} />}
-                  {currentArtifact?.type === 'document' && <FileText size={16} />}
-                  {currentArtifact?.type === 'chart' && <BarChart size={16} />}
-                </ActionButton>
-              </>
+            <ChatActions>
+              {hasArtifact && (
+                <>
+                  <ActionButton
+                    onClick={() => setIsArtifactExpanded(!isArtifactExpanded)}
+                    title={isArtifactExpanded ? 'Split View' : 'Full Screen'}
+                  >
+                    {isArtifactExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                  </ActionButton>
+                  <ActionButton
+                    onClick={toggleArtifactView}
+                    $isActive={hasArtifact}
+                    title="Toggle Artifact"
+                  >
+                    {currentArtifact?.type === 'code' && <Code2 size={16} />}
+                    {currentArtifact?.type === 'document' && <FileText size={16} />}
+                    {currentArtifact?.type === 'chart' && <BarChart size={16} />}
+                  </ActionButton>
+                </>
+              )}
+            </ChatActions>
+          </HeaderTop>
+
+          <StatusBar>
+            <ConnectionStatus $status={connectionStatus}>
+              {getConnectionStatusText()}
+            </ConnectionStatus>
+
+            {currentNode && (
+              <CurrentNode>
+                Processing: {currentNode} {executionStep > 0 && `(Step ${executionStep})`}
+              </CurrentNode>
             )}
-          </ChatActions>
+          </StatusBar>
         </ChatHeader>
 
         <MessagesContainer>
-          {messages.length === 0 ? (
+          {groupedMessages.length === 0 ? (
             <EmptyState>
               <EmptyIcon>💬</EmptyIcon>
               <h3 style={{ margin: '0 0 8px 0', color: 'inherit' }}>Start a conversation</h3>
-              <p style={{ margin: 0 }}>Ask me anything! I can help with code, explanations, and more.</p>
+              <p style={{ margin: 0 }}>Ask me anything! I can help with code, analysis, and creative projects. You can also upload files for me to analyze.</p>
+              {!isConnected && (
+                <p style={{ margin: '16px 0 0 0', color: '#f59e0b' }}>
+                  Connecting to AI service...
+                </p>
+              )}
             </EmptyState>
           ) : (
             <>
-              {messages.map((message) => (
-                <MessageBubble
-                  key={message.id}
-                  message={message}
-                  onArtifactClick={() => {
-                    if (message.hasArtifact && message.artifactContent) {
-                      // Find or create artifact for this message
-                      const existingArtifact = artifacts.find(a => a.messageId === message.id);
-                      if (existingArtifact) {
-                        setActiveArtifact(existingArtifact.id);
-                      }
-                    }
-                  }}
-                />
+              {groupedMessages.map((group) => (
+                <FinalMessageContainer key={group.id}>
+                  {/* User Message */}
+                  {group.userMessage && (
+                    <MessageBubble
+                      message={group.userMessage}
+                      onArtifactClick={() => { }}
+                    />
+                  )}
+
+                  {/* Execution Process Dropdown */}
+                  {group.executionSteps.length > 0 && (
+                    <ExecutionStatus
+                      groupId={group.id}
+                      steps={group.executionSteps.map((step, index) => ({
+                        id: step.id,
+                        message: step,
+                        stepNumber: index + 1
+                      }))}
+                      isExpanded={expandedExecutions.has(group.id)}
+                      onToggle={toggleExecutionExpanded}
+                      currentNode={currentNode}
+                      isRunning={isLoading && group === groupedMessages[groupedMessages.length - 1]}
+                    />
+                  )}
+
+                  {/* Final AI Response */}
+                  {group.finalMessage && (
+                    <MessageBubble
+                      message={group.finalMessage}
+                      onArtifactClick={() => {
+                        if (group.finalMessage?.hasArtifact && group.finalMessage?.artifactContent) {
+                          const existingArtifact = artifacts.find(a => a.messageId === group.finalMessage!.id);
+                          if (existingArtifact) {
+                            setActiveArtifact(existingArtifact.id);
+                          }
+                        }
+                      }}
+                    />
+                  )}
+
+                  {/* Artifacts List */}
+                  {group.artifacts.length > 0 && (
+                    <ArtifactsList>
+                      {group.artifacts.map((artifact) => (
+                        <ArtifactPreview
+                          key={artifact.id}
+                          onClick={() => setActiveArtifact(artifact.id)}
+                        >
+                          <ArtifactHeader>
+                            <ArtifactIcon>
+                              {getArtifactIcon(artifact.type)}
+                            </ArtifactIcon>
+                            <ArtifactTitle>{artifact.title}</ArtifactTitle>
+                            <ArtifactMeta>{artifact.language || artifact.type}</ArtifactMeta>
+                          </ArtifactHeader>
+                        </ArtifactPreview>
+                      ))}
+                    </ArtifactsList>
+                  )}
+                </FinalMessageContainer>
               ))}
 
               {isLoading && (
@@ -401,23 +745,65 @@ export default ExampleComponent;` : undefined,
         </MessagesContainer>
 
         <InputContainer>
-          <InputWrapper>
-            <TextInput
-              ref={inputRef}
-              value={inputValue}
-              onChange={handleInputChange}
-              onKeyPress={handleKeyPress}
-              placeholder="Type your message here... (Shift+Enter for new line)"
-              disabled={isLoading}
+          {sendError && (
+            <ErrorMessage>
+              <AlertCircle size={16} />
+              {sendError}
+            </ErrorMessage>
+          )}
+
+          {clarificationQuestion && (
+            <ClarificationBox>
+              <h4>
+                <AlertCircle size={16} />
+                Clarification needed
+              </h4>
+              <p>{clarificationQuestion}</p>
+            </ClarificationBox>
+          )}
+
+          <FileUploadSection $isVisible={showFileUpload}>
+            <FileUpload
+              onFilesSelected={setSelectedFiles}
+              disabled={isLoading || !isConnected}
+              maxFiles={5}
             />
-            <SendButton
-              onClick={handleSendMessage}
-              $canSend={canSend}
-              disabled={!canSend}
-              title="Send message"
-            >
-              <Send size={18} />
-            </SendButton>
+          </FileUploadSection>
+
+          <InputWrapper>
+            <InputSection>
+              <TextInput
+                ref={inputRef}
+                value={inputValue}
+                onChange={handleInputChange}
+                onKeyPress={handleKeyPress}
+                placeholder={getInputPlaceholder()}
+                disabled={isLoading || !isConnected}
+              />
+            </InputSection>
+
+            <InputActions>
+              <FileButton
+                onClick={toggleFileUpload}
+                $hasFiles={selectedFiles.length > 0 || showFileUpload}
+                title="Upload files"
+                disabled={isLoading || !isConnected}
+              >
+                {showFileUpload ? <X size={18} /> : <Paperclip size={18} />}
+                {selectedFiles.length > 0 && (
+                  <FileCount>{selectedFiles.length}</FileCount>
+                )}
+              </FileButton>
+
+              <SendButton
+                onClick={handleSendMessage}
+                $canSend={canSend}
+                disabled={!canSend}
+                title={clarificationQuestion ? "Send clarification" : "Send message"}
+              >
+                <Send size={18} />
+              </SendButton>
+            </InputActions>
           </InputWrapper>
         </InputContainer>
       </ChatPanel>

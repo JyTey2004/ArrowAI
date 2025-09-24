@@ -25,7 +25,6 @@ const MessageContainer = styled.div<{ $isUser: boolean }>`
     display: flex;
     flex-direction: ${props => props.$isUser ? 'row-reverse' : 'row'};
     align-items: flex-end;
-    gap: 8px;
     animation: ${slideIn} 0.3s ease-out;
 `;
 
@@ -35,6 +34,7 @@ const AvatarUtilsContainer = styled.div`
     align-items: flex-end;
     justify-content: flex-start;
     gap: 6px;
+    margin-left: 8px;
 `;
 
 const Avatar = styled.div<{ $isUser: boolean }>`
@@ -59,7 +59,7 @@ const MessageBubbleContainer = styled.div<{ $isUser: boolean }>`
     width: fit-content;
     align-self: ${props => props.$isUser ? 'flex-end' : 'flex-start'};
     justify-self: ${props => props.$isUser ? 'flex-end' : 'flex-start'};
-    max-width: 70%;
+    max-width: ${props => props.$isUser ? '70%' : '100%'};
     min-width: 120px;
     padding: 12px 16px;
     border-radius: ${props => props.$isUser ? '18px 18px 6px 18px' : '18px 18px 18px 6px'};
@@ -88,9 +88,209 @@ const MessageBubbleContainer = styled.div<{ $isUser: boolean }>`
     }
 `;
 
-const MessageText = styled.div<{ hasArtifact?: boolean }>`
+const MarkdownContent = styled.div<{ $isUser: boolean; hasArtifact?: boolean }>`
   font-size: 14px;
   margin-bottom: ${props => props.hasArtifact ? '12px' : '0'};
+  
+  /* Headings */
+  h1, h2, h3, h4, h5, h6 {
+    margin: 8px 0 4px 0;
+    font-weight: 600;
+    line-height: 1.3;
+    color: ${props => props.$isUser ? 'rgba(255, 255, 255, 0.95)' : props.theme.textPrimary};
+    
+    &:first-child {
+      margin-top: 0;
+    }
+  }
+  
+  h1 { font-size: 18px; }
+  h2 { font-size: 16px; }
+  h3 { font-size: 15px; }
+  h4, h5, h6 { font-size: 14px; }
+  
+  /* Paragraphs */
+  p {
+    margin: 0 0 8px 0;
+    line-height: 1.5;
+    
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+  
+  /* Lists */
+  ul, ol {
+    margin: 8px 0;
+    padding-left: 20px;
+    
+    li {
+      margin: 2px 0;
+      line-height: 1.4;
+    }
+    
+    ul, ol {
+      margin: 4px 0;
+    }
+  }
+  
+  /* Code */
+  code {
+    background: ${props => props.$isUser
+        ? 'rgba(255, 255, 255, 0.2)'
+        : props.theme.glassBackground
+    };
+    border: 1px solid ${props => props.$isUser
+        ? 'rgba(255, 255, 255, 0.3)'
+        : props.theme.glassBorder
+    };
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-family: 'SF Mono', 'Monaco', 'Cascadia Code', 'Roboto Mono', monospace;
+    font-size: 13px;
+    color: ${props => props.$isUser
+        ? 'rgba(255, 255, 255, 0.9)'
+        : props.theme.textPrimary
+    };
+    word-break: break-word;
+  }
+  
+  /* Code blocks */
+  pre {
+    background: ${props => props.$isUser
+        ? 'rgba(0, 0, 0, 0.2)'
+        : props.theme.glassBackground
+    };
+    border: 1px solid ${props => props.$isUser
+        ? 'rgba(255, 255, 255, 0.3)'
+        : props.theme.glassBorder
+    };
+    border-radius: 8px;
+    padding: 12px;
+    margin: 8px 0;
+    overflow-x: auto;
+    font-family: 'SF Mono', 'Monaco', 'Cascadia Code', 'Roboto Mono', monospace;
+    font-size: 13px;
+    line-height: 1.4;
+    color: ${props => props.$isUser
+        ? 'rgba(255, 255, 255, 0.9)'
+        : props.theme.textPrimary
+    };
+    
+    code {
+      background: none;
+      border: none;
+      padding: 0;
+      color: inherit;
+    }
+    
+    &::-webkit-scrollbar {
+      height: 6px;
+    }
+    
+    &::-webkit-scrollbar-thumb {
+      background: ${props => props.$isUser
+        ? 'rgba(255, 255, 255, 0.3)'
+        : props.theme.glassBorder
+    };
+      border-radius: 3px;
+    }
+  }
+  
+  /* Links */
+  a {
+    color: ${props => props.$isUser
+        ? 'rgba(255, 255, 255, 0.9)'
+        : props.theme.accent
+    };
+    text-decoration: underline;
+    
+    &:hover {
+      text-decoration: none;
+      opacity: 0.8;
+    }
+  }
+  
+  /* Emphasis */
+  strong, b {
+    font-weight: 600;
+    color: ${props => props.$isUser
+        ? 'rgba(255, 255, 255, 0.95)'
+        : props.theme.textPrimary
+    };
+  }
+  
+  em, i {
+    font-style: italic;
+    color: ${props => props.$isUser
+        ? 'rgba(255, 255, 255, 0.85)'
+        : props.theme.textSecondary
+    };
+  }
+  
+  /* Blockquotes */
+  blockquote {
+    border-left: 3px solid ${props => props.$isUser
+        ? 'rgba(255, 255, 255, 0.4)'
+        : props.theme.accent
+    };
+    margin: 8px 0;
+    padding: 8px 0 8px 16px;
+    background: ${props => props.$isUser
+        ? 'rgba(255, 255, 255, 0.1)'
+        : props.theme.glassBackground
+    };
+    border-radius: 0 4px 4px 0;
+    color: ${props => props.$isUser
+        ? 'rgba(255, 255, 255, 0.8)'
+        : props.theme.textSecondary
+    };
+    font-style: italic;
+    
+    p {
+      margin: 0;
+    }
+  }
+  
+  /* Tables */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 8px 0;
+    font-size: 13px;
+  }
+  
+  th, td {
+    border: 1px solid ${props => props.$isUser
+        ? 'rgba(255, 255, 255, 0.3)'
+        : props.theme.glassBorder
+    };
+    padding: 6px 8px;
+    text-align: left;
+  }
+  
+  th {
+    background: ${props => props.$isUser
+        ? 'rgba(255, 255, 255, 0.2)'
+        : props.theme.glassBackground
+    };
+    font-weight: 600;
+  }
+  
+  /* Horizontal rules */
+  hr {
+    border: none;
+    border-top: 1px solid ${props => props.$isUser
+        ? 'rgba(255, 255, 255, 0.3)'
+        : props.theme.glassBorder
+    };
+    margin: 16px 0;
+  }
+  
+  /* Checkboxes for task lists */
+  input[type="checkbox"] {
+    margin-right: 8px;
+  }
 `;
 
 const MessageTime = styled.div<{ $isUser: boolean }>`
@@ -186,6 +386,7 @@ const CodePreview = styled.pre`
 `;
 
 const ActionButton = styled.button<{ $isUser: boolean }>`
+    margin-top: 6px;
     padding: 8px;
     background: ${props => props.$isUser ? 'rgba(255, 255, 255, 0.2)' : props.theme.glassBackground};
     border: 1px solid ${props => props.$isUser ? 'rgba(0, 0, 0, 0.2)' : props.theme.glassBorder};
@@ -214,6 +415,63 @@ const ActionButton = styled.button<{ $isUser: boolean }>`
         opacity: 1;
     }
 `;
+
+// Simple markdown parser
+const parseMarkdown = (text: string): string => {
+    let html = text;
+
+    // Headers
+    html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+    html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+    html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+
+    // Bold
+    html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/__(.*?)__/g, '<strong>$1</strong>');
+
+    // Italic
+    html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+    // html = html.replace(/_(.*?)_/g, '<em>$1</em>');
+
+    // Inline code
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+    // Code blocks
+    html = html.replace(/```(\w+)?\n([\s\S]*?)\n```/g, '<pre><code>$2</code></pre>');
+
+    // Links
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+
+    // Line breaks
+    html = html.replace(/\n\n/g, '</p><p>');
+    html = html.replace(/\n/g, '<br>');
+
+    // Wrap in paragraphs if not already wrapped
+    if (!html.startsWith('<') || (!html.includes('<p>') && !html.includes('<h'))) {
+        html = '<p>' + html + '</p>';
+    }
+
+    // Clean up empty paragraphs
+    html = html.replace(/<p><\/p>/g, '');
+    html = html.replace(/<p>\s*<\/p>/g, '');
+
+    // Lists
+    html = html.replace(/^\* (.*$)/gim, '<li>$1</li>');
+    html = html.replace(/^- (.*$)/gim, '<li>$1</li>');
+    html = html.replace(/^(\d+)\. (.*$)/gim, '<li>$1</li>');
+
+    // Wrap consecutive list items
+    html = html.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+    html = html.replace(/<\/li>\s*<li>/g, '</li><li>');
+
+    // Blockquotes
+    html = html.replace(/^> (.*$)/gim, '<blockquote>$1</blockquote>');
+
+    // Horizontal rules
+    html = html.replace(/^---$/gim, '<hr>');
+
+    return html;
+};
 
 const formatTime = (timestamp: Date): string => {
     return timestamp.toLocaleTimeString([], {
@@ -283,36 +541,25 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         return lines.length > 3 ? preview + '\n...' : preview;
     };
 
+    const renderedMarkdown = parseMarkdown(message.text);
+
     return (
         <MessageContainer $isUser={message.isUser}>
-            <AvatarUtilsContainer>
-                <ActionButton
-                    $isUser={message.isUser}
-                    onClick={handleCopyText}
-                    title="Copy message"
-                >
-                    {copied ? <Check size={10} /> : <Copy size={10} />}
-                </ActionButton>
+            {message.isUser &&
 
-                {message.hasArtifact && (
-                    <ActionButton
-                        $isUser={message.isUser}
-                        onClick={handleCopyCode}
-                        title="Copy code"
-                    >
-                        <Code2 size={10} />
-                    </ActionButton>
-                )}
-                <Avatar $isUser={message.isUser}>
-                    {message.isUser ? 'U' : 'AI'}
-                </Avatar>
-            </AvatarUtilsContainer>
-            <div style={{ flex: 1, maxWidth: '70%' }}>
+                <AvatarUtilsContainer>
+                    <Avatar $isUser={message.isUser}>
+                        AC
+                    </Avatar>
+                </AvatarUtilsContainer>
+            }
+            <div style={{ flex: 1, maxWidth: `${message.isUser ? '70%' : '100%'}` }}>
                 <MessageBubbleContainer $isUser={message.isUser}>
-                    <MessageText hasArtifact={message.hasArtifact}>
-                        {message.text}
-                    </MessageText>
-
+                    <MarkdownContent
+                        $isUser={message.isUser}
+                        hasArtifact={message.hasArtifact}
+                        dangerouslySetInnerHTML={{ __html: renderedMarkdown }}
+                    />
                     {message.hasArtifact && message.artifactContent && (
                         <ArtifactPreview onClick={onArtifactClick}>
                             <ArtifactHeader>
@@ -350,6 +597,24 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                         {formatTime(message.timestamp)}
                     </MessageTime>
                 </MessageBubbleContainer>
+                {message.hasArtifact && !message.isUser && (
+                    <>
+                        <ActionButton
+                            $isUser={message.isUser}
+                            onClick={handleCopyText}
+                            title="Copy message"
+                        >
+                            {copied ? <Check size={10} /> : <Copy size={10} />}
+                        </ActionButton>
+                        <ActionButton
+                            $isUser={message.isUser}
+                            onClick={handleCopyCode}
+                            title="Copy code"
+                        >
+                            <Code2 size={10} />
+                        </ActionButton>
+                    </>
+                )}
             </div>
         </MessageContainer>
     );
