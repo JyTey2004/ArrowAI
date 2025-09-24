@@ -37,7 +37,11 @@ import threading
 import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from app.core.logging import get_logger
+
 from app.utils.sanitization.code_extracters import _extract_python
+
+logger = get_logger(__name__)
 
 # --------------------------- Public Interfaces --------------------------------
 
@@ -338,6 +342,7 @@ class CodeSandbox:
 
         # (6) LLM code writer (optional)
         code_to_run = _extract_python(req.code)
+        
         writer_note = None
         if req.use_llm_writer and code_llm and req.task:
             # Small preview of current kernel namespace + files
@@ -392,6 +397,8 @@ class CodeSandbox:
             artifacts=artifacts,
             evaluation_line="PENDING",
         )
+        
+        logger.info(f"exec_cell: run_id={run_id}, final code:\n{code_to_run}\n--- end code ---\n\n")
 
         # (5) LLM evaluation (optional)
         if eval_llm and req.task:
@@ -402,8 +409,13 @@ class CodeSandbox:
             verdict = eval_llm.generate(eval_prompt).strip()
             self._update_last_evaluation(run_id, verdict)
             
+        if 'FAIL' in (verdict if eval_llm and req.task else ''):
+            ok = False
+        else:
+            ok = ("Traceback (most recent call last)" not in stderr) and ("[Sandbox] Timeout" not in stderr)
+            
         return ExecResult(
-            ok=("Traceback (most recent call last)" not in stderr) and ("[Sandbox] Timeout" not in stderr),
+            ok=ok,
             stdout=stdout,
             stderr=stderr,
             display=display,

@@ -207,31 +207,6 @@ const InputContainer = styled.div`
   backdrop-filter: blur(8px);
 `;
 
-const ClarificationBox = styled.div`
-  background: ${props => props.theme.glassBackground};
-  border: 1px solid ${props => props.theme.accent}40;
-  border-radius: 12px;
-  padding: 16px;
-  margin-bottom: 16px;
-  
-  h4 {
-    color: ${props => props.theme.accent};
-    margin: 0 0 8px 0;
-    font-size: 14px;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  
-  p {
-    margin: 0;
-    color: ${props => props.theme.textSecondary};
-    font-size: 14px;
-    line-height: 1.4;
-  }
-`;
-
 const FileUploadSection = styled.div<{ $isVisible: boolean }>`
   max-height: ${props => props.$isVisible ? '300px' : '0'};
   opacity: ${props => props.$isVisible ? 1 : 0};
@@ -412,7 +387,6 @@ const ErrorMessage = styled.div`
   gap: 8px;
 `;
 
-
 export const ChatInterface: React.FC = () => {
   const {
     activeChat,
@@ -431,6 +405,7 @@ export const ChatInterface: React.FC = () => {
     executionStep,
     fileUploads,
     clearCompletedUploads,
+    addMessage,
   } = useChat();
 
   const [inputValue, setInputValue] = useState('');
@@ -439,6 +414,7 @@ export const ChatInterface: React.FC = () => {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [showFileUpload, setShowFileUpload] = useState(false);
   const [expandedExecutions, setExpandedExecutions] = useState<Set<string>>(new Set());
+  const [pendingClarification, setPendingClarification] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -446,17 +422,43 @@ export const ChatInterface: React.FC = () => {
   const hasArtifact = activeArtifact !== null;
   const currentArtifact = artifacts.find(a => a.id === activeArtifact);
 
-  // Group messages into execution groups
-  const groupedMessages = React.useMemo(() => {
-    const groups: Array<{
-      id: string;
-      userMessage?: typeof messages[0];
-      executionSteps: Array<typeof messages[0]>;
-      finalMessage?: typeof messages[0];
-      artifacts: typeof artifacts;
-    }> = [];
+  // Add clarification message to chat when clarificationQuestion changes
+  useEffect(() => {
+    if (clarificationQuestion && !pendingClarification) {
+      setPendingClarification(true);
+      addMessage({
+        text: `**Clarification needed:** ${clarificationQuestion}`,
+        isUser: false,
+      });
+    } else if (!clarificationQuestion && pendingClarification) {
+      setPendingClarification(false);
+    }
+  }, [clarificationQuestion, addMessage, pendingClarification]);
 
-    let currentGroup: typeof groups[0] | null = null;
+  // Group messages into execution groups with real-time execution steps
+  const groupedMessages = React.useMemo(() => {
+    type ChatMessage = typeof messages[number];
+    type ArtifactItem = typeof artifacts[number];
+
+    type ExecutionGroup = {
+      id: string;
+      userMessage?: ChatMessage;
+      executionSteps: ChatMessage[];
+      finalMessage?: ChatMessage;
+      artifacts: ArtifactItem[];
+      isActive?: boolean;
+    };
+
+    const groups: ExecutionGroup[] = [];
+
+    let currentGroup: ExecutionGroup = {
+      id: '',
+      userMessage: undefined,
+      executionSteps: [],
+      finalMessage: undefined,
+      artifacts: [],
+      isActive: false,
+    };
 
     messages.forEach((message) => {
       if (message.isUser) {
@@ -470,6 +472,7 @@ export const ChatInterface: React.FC = () => {
           executionSteps: [],
           finalMessage: undefined,
           artifacts: [],
+          isActive: false,
         };
       } else if (currentGroup) {
         // Check if this is an execution step or final message
@@ -479,21 +482,51 @@ export const ChatInterface: React.FC = () => {
           message.text.includes('📋 **Todo List Generated:**') ||
           message.text.includes('📎 **Artifact');
 
+        const isClarificationMessage = message.text.includes('**Clarification needed:**');
+
         if (isExecutionStep) {
           currentGroup.executionSteps.push(message);
-        } else {
-          // This is the final message
+          currentGroup.isActive = true; // Mark as active when receiving execution steps
+        } else if (!isClarificationMessage) {
+          // This is the final message (not a clarification)
           currentGroup.finalMessage = message;
+          currentGroup.isActive = false; // Mark as completed
           // Find artifacts related to this group
           currentGroup.artifacts = artifacts.filter(a =>
             currentGroup!.executionSteps.some(step => step.id === a.messageId) ||
             a.messageId === message.id
           );
+        } else {
+          // Handle clarification messages - they don't belong to groups, display separately
+          const clarificationGroup = {
+            id: `clarification-${message.id}`,
+            userMessage: undefined,
+            executionSteps: [],
+            finalMessage: message,
+            artifacts: [],
+            isActive: false,
+          };
+          groups.push(clarificationGroup);
         }
+      } else {
+        // Message without a user message (like clarification) - create standalone group
+        const standaloneGroup = {
+          id: `standalone-${message.id}`,
+          userMessage: undefined,
+          executionSteps: [],
+          finalMessage: message,
+          artifacts: [],
+          isActive: false,
+        };
+        groups.push(standaloneGroup);
       }
     });
 
-    if (currentGroup) {
+    if (currentGroup && (currentGroup.userMessage || currentGroup.executionSteps.length > 0 || currentGroup.finalMessage)) {
+      // If we have execution steps but no final message, mark as active
+      if (currentGroup.executionSteps.length > 0 && !currentGroup.finalMessage) {
+        currentGroup.isActive = true;
+      }
       groups.push(currentGroup);
     }
 
@@ -678,7 +711,7 @@ export const ChatInterface: React.FC = () => {
                     />
                   )}
 
-                  {/* Execution Process Dropdown */}
+                  {/* Execution Process Dropdown - Show immediately when steps arrive */}
                   {group.executionSteps.length > 0 && (
                     <ExecutionStatus
                       groupId={group.id}
@@ -690,11 +723,11 @@ export const ChatInterface: React.FC = () => {
                       isExpanded={expandedExecutions.has(group.id)}
                       onToggle={toggleExecutionExpanded}
                       currentNode={currentNode}
-                      isRunning={isLoading && group === groupedMessages[groupedMessages.length - 1]}
+                      isRunning={(isLoading && group.isActive) || (group.isActive && !group.finalMessage)}
                     />
                   )}
 
-                  {/* Final AI Response */}
+                  {/* Final AI Response - Only show when available */}
                   {group.finalMessage && (
                     <MessageBubble
                       message={group.finalMessage}
@@ -750,16 +783,6 @@ export const ChatInterface: React.FC = () => {
               <AlertCircle size={16} />
               {sendError}
             </ErrorMessage>
-          )}
-
-          {clarificationQuestion && (
-            <ClarificationBox>
-              <h4>
-                <AlertCircle size={16} />
-                Clarification needed
-              </h4>
-              <p>{clarificationQuestion}</p>
-            </ClarificationBox>
           )}
 
           <FileUploadSection $isVisible={showFileUpload}>

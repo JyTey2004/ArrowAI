@@ -21,6 +21,7 @@ interface ExecutionStatusProps {
 
 const ExecutionContainer = styled.div`
   overflow-y: auto;
+  overflow-x: hidden;
   border-radius: 12px;
 
 `;
@@ -119,6 +120,7 @@ const ExecutionSteps = styled.div<{ $isExpanded: boolean }>`
   max-height: ${props => props.$isExpanded ? '400px' : '0'};
   opacity: ${props => props.$isExpanded ? 1 : 0};
   overflow-y: auto;
+  overflow-x: hidden;
   transition: all 0.3s ease;
 
   /* Custom scrollbar */
@@ -188,6 +190,7 @@ const StepIcon = styled.div<{ $status: 'pending' | 'running' | 'completed' | 'er
 
 const StepContent = styled.div`
   flex: 1;
+  width: 0; /* For text truncation */
   
   h5 {
     font-size: 13px;
@@ -369,7 +372,7 @@ export const ExecutionStatus: React.FC<ExecutionStatusProps> = ({
                 <h5>{getStepTitle(step.message, step.stepNumber)}</h5>
                 <p>{getStepDescription(step.message)}</p>
                 {codeBlock && (
-                  <pre>{codeBlock.length > 200 ? codeBlock.substring(0, 200) + '\n...' : codeBlock}</pre>
+                  <pre>{codeBlock.length > 500 ? codeBlock.substring(0, 500) + '\n...' : codeBlock}</pre>
                 )}
                 <StepTimestamp>
                   {formatTimestamp(step.message.timestamp)}
