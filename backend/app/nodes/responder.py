@@ -20,7 +20,7 @@ class ResponderOutput(BaseModel):
 
 RESPONDER_SYSTEM = (
     "You are a precise analyst. Read CEL.md, the task, and runtime outputs. "
-    "Return a concise markdown answer in the 'answer' field (no code fences, no links), "
+    "Return a concise markdown answer in the 'answer' field (no code fences, no links)"
     "and a list of artifact filenames in the 'artifacts' field, that the user needs to see to understand the answer. Do not include unnecessary files. "
     "Output MUST be valid JSON that conforms to the provided JSON schema. "
     "Do not include any extra fields."

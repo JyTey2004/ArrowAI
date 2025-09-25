@@ -110,6 +110,7 @@ async def ws_assist(websocket: WebSocket, run_id: str = Query(...)):
     base = public_base_path(websocket)
     try:
         while True:
+            
             msg = await websocket.receive_json()
             if not isinstance(msg, dict):
                 await websocket.send_json({"event": "error", "detail": "Expected JSON object"})

@@ -450,7 +450,6 @@ export const ChatInterface: React.FC = () => {
     };
 
     const groups: ExecutionGroup[] = [];
-
     let currentGroup: ExecutionGroup = {
       id: '',
       userMessage: undefined,
@@ -462,8 +461,7 @@ export const ChatInterface: React.FC = () => {
 
     messages.forEach((message) => {
       if (message.isUser) {
-        // Start new group
-        if (currentGroup) {
+        if (currentGroup.id) {
           groups.push(currentGroup);
         }
         currentGroup = {
@@ -474,8 +472,7 @@ export const ChatInterface: React.FC = () => {
           artifacts: [],
           isActive: false,
         };
-      } else if (currentGroup) {
-        // Check if this is an execution step or final message
+      } else if (currentGroup.id) {
         const isExecutionStep = message.text.includes('✅ **Output:**') ||
           message.text.includes('❌ **Error:**') ||
           message.text.includes('💻 **Code Generated:**') ||
@@ -486,7 +483,24 @@ export const ChatInterface: React.FC = () => {
 
         if (isExecutionStep) {
           currentGroup.executionSteps.push(message);
-          currentGroup.isActive = true; // Mark as active when receiving execution steps
+          currentGroup.isActive = true;
+
+          // ✅ Add artifacts immediately as execution steps arrive
+          const stepArtifacts = artifacts.filter(a => a.messageId === message.id);
+          currentGroup.artifacts = [
+            ...currentGroup.artifacts,
+            ...stepArtifacts.filter(a => !currentGroup.artifacts.some(existing => existing.id === a.id))
+          ];
+        } else if (!isClarificationMessage) {
+          currentGroup.finalMessage = message;
+          currentGroup.isActive = false;
+
+          // Also check for artifacts on final message
+          const finalArtifacts = artifacts.filter(a => a.messageId === message.id);
+          currentGroup.artifacts = [
+            ...currentGroup.artifacts,
+            ...finalArtifacts.filter(a => !currentGroup.artifacts.some(existing => existing.id === a.id))
+          ];
         } else if (!isClarificationMessage) {
           // This is the final message (not a clarification)
           currentGroup.finalMessage = message;
@@ -522,8 +536,7 @@ export const ChatInterface: React.FC = () => {
       }
     });
 
-    if (currentGroup && (currentGroup.userMessage || currentGroup.executionSteps.length > 0 || currentGroup.finalMessage)) {
-      // If we have execution steps but no final message, mark as active
+    if (currentGroup.id && (currentGroup.userMessage || currentGroup.executionSteps.length > 0 || currentGroup.finalMessage)) {
       if (currentGroup.executionSteps.length > 0 && !currentGroup.finalMessage) {
         currentGroup.isActive = true;
       }
