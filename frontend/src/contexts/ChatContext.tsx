@@ -3,6 +3,7 @@ import React, { createContext, useContext, useState, useRef, useEffect } from 'r
 import type { ReactNode } from 'react';
 import type { Chat, Message, Artifact } from '../types/chat';
 import { AIWebSocketService, type FileUpload } from '../services/websocketService';
+import { v4 as uuidv4 } from 'uuid';
 
 interface FileUploadState {
   id: string;
@@ -16,7 +17,7 @@ interface ChatContextType {
   chats: Chat[];
   activeChat: string | null;
   setActiveChat: (chatId: string) => void;
-  addNewChat: () => void;
+  addNewChat: () => string;
   currentView: 'home' | 'all-chats';
   setCurrentView: (view: 'home' | 'all-chats') => void;
   messages: Message[];
@@ -27,7 +28,6 @@ interface ChatContextType {
   activeArtifact: string | null;
   setActiveArtifact: (artifactId: string | null) => void;
   addArtifact: (artifact: Omit<Artifact, 'id'>) => void;
-  // WebSocket related
   sendMessage: (text: string, files?: File[]) => Promise<void>;
   isConnected: boolean;
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -36,7 +36,6 @@ interface ChatContextType {
   sendClarification: (text: string) => void;
   todos: string | null;
   executionStep: number;
-  // File upload related
   fileUploads: FileUploadState[];
   clearCompletedUploads: () => void;
   getSupportedFileTypes: () => string[];
@@ -46,15 +45,7 @@ interface ChatContextType {
 
 const ChatContext = createContext<ChatContextType | undefined>(undefined);
 
-// Sample chats data
-const initialChats: Chat[] = [
-  {
-    id: 'chat-1',
-    title: 'Getting Started',
-    preview: 'Welcome to the AI assistant...',
-    timestamp: new Date(Date.now() - 1000 * 60 * 30),
-  },
-];
+const initialChats: Chat[] = [];
 
 interface ChatContextProviderProps {
   children: ReactNode;
@@ -66,27 +57,24 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
   websocketUrl = 'ws://localhost:8000'
 }) => {
   const [chats, setChats] = useState<Chat[]>(initialChats);
-  const [activeChat, setActiveChat] = useState<string | null>('chat-1');
+  const [activeChat, setActiveChat] = useState<string | null>(null);
   const [currentView, setCurrentView] = useState<'home' | 'all-chats'>('home');
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [activeArtifact, setActiveArtifact] = useState<string | null>(null);
 
-  // WebSocket related state
   const [isConnected, setIsConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const [currentNode, setCurrentNode] = useState<string | null>(null);
   const [clarificationQuestion, setClarificationQuestion] = useState<string | null>(null);
   const [todos, setTodos] = useState<string | null>(null);
   const [executionStep, setExecutionStep] = useState(0);
-
-  // File upload state
   const [fileUploads, setFileUploads] = useState<FileUploadState[]>([]);
 
   const wsService = useRef<AIWebSocketService | null>(null);
 
-  // Initialize WebSocket service
+  // Initialize WebSocket service (don't connect yet)
   useEffect(() => {
     wsService.current = new AIWebSocketService(websocketUrl);
 
@@ -117,7 +105,6 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
 
       onTodos: (markdown) => {
         setTodos(markdown);
-        // Add todos as a system message
         addMessage({
           text: `📋 **Todo List Generated:**\n\n${markdown}`,
           isUser: false,
@@ -128,7 +115,6 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
       },
 
       onCode: (text, filename) => {
-        // Add code as an artifact with filename
         addMessage({
           text: filename ? `💻 **Code Generated:** ${filename}` : '💻 **Code Generated:**',
           isUser: false,
@@ -178,7 +164,6 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
       },
 
       onAnswer: (text) => {
-        // Add the final answer
         addMessage({
           text,
           isUser: false,
@@ -197,7 +182,6 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
         setCurrentNode(null);
       },
 
-      // File upload callbacks
       onFileUploadProgress: (progress, fileName) => {
         setFileUploads(prev => prev.map(upload =>
           upload.file.name === fileName
@@ -223,28 +207,37 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
       }
     });
 
-    // Connect on mount
-    connectWebSocket();
-
     return () => {
       wsService.current?.disconnect();
     };
   }, [websocketUrl]);
 
-  const connectWebSocket = async () => {
-    if (!wsService.current) return;
+  // Connect WebSocket when activeChat changes
+  useEffect(() => {
+    const connectToChat = async () => {
+      if (!wsService.current || !activeChat) return;
 
-    setConnectionStatus('connecting');
-    try {
-      await wsService.current.connect();
-    } catch (error) {
-      console.error('Failed to connect:', error);
-      setConnectionStatus('error');
-    }
-  };
+      // Disconnect any existing connection
+      if (wsService.current.isConnected()) {
+        wsService.current.disconnect();
+      }
 
-  const addNewChat = () => {
-    const newChatId = `chat-${Date.now()}`;
+      setConnectionStatus('connecting');
+      try {
+        // Connect with the active chat UUID
+        await wsService.current.connect(activeChat);
+        console.log('Connected to chat:', activeChat);
+      } catch (error) {
+        console.error('Failed to connect:', error);
+        setConnectionStatus('error');
+      }
+    };
+
+    connectToChat();
+  }, [activeChat]);
+
+  const addNewChat = (): string => {
+    const newChatId = uuidv4();
     const newChat: Chat = {
       id: newChatId,
       title: 'New Chat',
@@ -253,7 +246,7 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
     };
 
     setChats(prev => [newChat, ...prev]);
-    setActiveChat(newChatId);
+    setActiveChat(newChatId); // This triggers WebSocket connection
     setMessages([]);
     setClarificationQuestion(null);
     setTodos(null);
@@ -262,10 +255,7 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
     setCurrentView('home');
     setFileUploads([]);
 
-    // Create new WebSocket session
-    if (wsService.current) {
-      wsService.current.newConversation();
-    }
+    return newChatId;
   };
 
   const addMessage = (messageData: Omit<Message, 'id' | 'timestamp'>) => {
@@ -276,7 +266,6 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
     };
     setMessages(prev => [...prev, newMessage]);
 
-    // If message has an artifact, create it
     if (newMessage.hasArtifact && newMessage.artifactContent) {
       const artifactTitle = newMessage.artifactFilename ||
         `${newMessage.artifactType || 'Code'} from message`;
@@ -308,7 +297,6 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
       throw new Error('Not connected to AI service');
     }
 
-    // Validate files if provided
     if (files.length > 0) {
       for (const file of files) {
         const validation = wsService.current.validateFile(file);
@@ -317,7 +305,6 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
         }
       }
 
-      // Add file upload states
       const newUploads: FileUploadState[] = files.map(file => ({
         id: `${Date.now()}_${file.name}`,
         file,
@@ -327,7 +314,6 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
 
       setFileUploads(prev => [...prev, ...newUploads]);
 
-      // Add a message showing the files being uploaded
       if (files.length > 0) {
         const fileList = files.map(f => `📎 ${f.name} (${(f.size / 1024).toFixed(1)} KB)`).join('\n');
         addMessage({
@@ -341,7 +327,6 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
         });
       }
     } else {
-      // Add user message immediately
       addMessage({
         text,
         isUser: true,
@@ -368,7 +353,6 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
       throw new Error('Not connected to AI service');
     }
 
-    // Add clarification as user message
     addMessage({
       text: `**Clarification:** ${text}`,
       isUser: true,
@@ -389,22 +373,22 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
     setFileUploads(prev => prev.filter(upload => upload.status !== 'completed'));
   };
 
-  // When active chat changes, load its messages
   const handleSetActiveChat = (chatId: string) => {
     setActiveChat(chatId);
-    // In a real app, you'd load messages for this chat from storage/API
-    setMessages([
-      {
-        id: 'welcome',
-        text: 'Hello! I\'m your AI assistant. I can help you with coding, analysis, and creative projects. You can also upload files for me to analyze. What would you like to work on?',
-        isUser: false,
-        timestamp: new Date(),
-      }
-    ]);
+
+    const existingChat = chats.find(chat => chat.id === chatId);
+
+    if (existingChat && messages.length === 0) {
+      setMessages([]);
+      setClarificationQuestion(null);
+      setTodos(null);
+      setCurrentNode(null);
+      setExecutionStep(0);
+    }
+
     setFileUploads([]);
   };
 
-  // File utility functions
   const getSupportedFileTypes = (): string[] => {
     return wsService.current?.getSupportedFileTypes() || [];
   };
@@ -434,7 +418,6 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
         activeArtifact,
         setActiveArtifact,
         addArtifact,
-        // WebSocket methods
         sendMessage,
         isConnected,
         connectionStatus,
@@ -443,7 +426,6 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
         sendClarification,
         todos,
         executionStep,
-        // File upload methods
         fileUploads,
         clearCompletedUploads,
         getSupportedFileTypes,
@@ -464,7 +446,6 @@ export const useChat = () => {
   return context;
 };
 
-// Helper function to detect language from filename
 const detectLanguageFromFilename = (filename?: string): string | undefined => {
   if (!filename) return undefined;
 

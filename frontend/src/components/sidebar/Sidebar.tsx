@@ -1,5 +1,6 @@
 // src/components/sidebar/Sidebar.tsx
 import React, { useMemo, useState } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import styled, { keyframes } from 'styled-components';
 import {
   Home,
@@ -296,6 +297,8 @@ export const Sidebar: React.FC = () => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const { chats, activeChat, setActiveChat, addNewChat, currentView, setCurrentView } = useChat();
   const { isDark, toggleTheme } = useTheme();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const displayChats = currentView === 'home' ? chats.slice(0, 6) : chats;
 
@@ -307,6 +310,34 @@ export const Sidebar: React.FC = () => {
     plan: 'Pro Plan'
   };
 
+  // Handle new chat creation with UUID routing
+  const handleNewChat = () => {
+    const chatId = addNewChat(); // This now returns the UUID from context
+    navigate(`/chat/${chatId}`);
+  };
+
+  // Handle chat selection with routing
+  const handleChatSelect = (chatId: string) => {
+    setActiveChat(chatId);
+    navigate(`/chat/${chatId}`);
+  };
+
+  // Handle home navigation
+  const handleHomeClick = () => {
+    setCurrentView('home');
+    navigate('/');
+  };
+
+  // Handle archive navigation
+  const handleArchiveClick = () => {
+    setCurrentView('all-chats');
+    navigate('/archive');
+  };
+
+  // Determine if we're on a specific route
+  const isHomePage = location.pathname === '/';
+  const isArchivePage = location.pathname === '/archive';
+
   // Define top-level nav items
   const navItems = useMemo(
     () => [
@@ -314,18 +345,18 @@ export const Sidebar: React.FC = () => {
         key: 'home' as const,
         label: 'Home',
         icon: <Home size={18} />,
-        active: currentView === 'home',
-        onClick: () => setCurrentView('home'),
+        active: isHomePage,
+        onClick: handleHomeClick,
       },
       {
         key: 'all-chats' as const,
         label: 'Archive',
         icon: <Archive size={18} />,
-        active: currentView === 'all-chats',
-        onClick: () => setCurrentView('all-chats'),
+        active: isArchivePage,
+        onClick: handleArchiveClick,
       },
     ],
-    [currentView, setCurrentView]
+    [isHomePage, isArchivePage]
   );
 
   // When collapsed: only show the *active* nav item
@@ -334,11 +365,13 @@ export const Sidebar: React.FC = () => {
   const handleProfileClick = () => {
     // Handle profile menu or navigation
     console.log('Profile clicked');
+    navigate('/profile');
   };
 
   const handleSettingsClick = () => {
     // Handle settings
     console.log('Settings clicked');
+    navigate('/settings');
   };
 
   return (
@@ -379,7 +412,7 @@ export const Sidebar: React.FC = () => {
           ))}
 
           {isCollapsed && (
-            <CollapsedActionButton onClick={addNewChat} title="New Chat">
+            <CollapsedActionButton onClick={handleNewChat} title="New Chat">
               <Plus size={18} />
             </CollapsedActionButton>
           )}
@@ -387,7 +420,7 @@ export const Sidebar: React.FC = () => {
           {!isCollapsed && (
             <NavButton
               $isPrimary
-              onClick={addNewChat}
+              onClick={handleNewChat}
               title="New Chat"
               style={{ gridColumn: '1 / -1' }}
             >
@@ -412,7 +445,7 @@ export const Sidebar: React.FC = () => {
                   <ChatItem
                     chat={chat}
                     isActive={activeChat === chat.id}
-                    onClick={() => setActiveChat(chat.id)}
+                    onClick={() => handleChatSelect(chat.id)}
                   />
                 </ChatItemContainer>
               ))}
@@ -449,7 +482,10 @@ export const Sidebar: React.FC = () => {
               <p>{user.plan}</p>
             </ProfileInfo>
             <ProfileActions $isCollapsed={isCollapsed}>
-              <ActionButton onClick={handleSettingsClick} title="Settings">
+              <ActionButton onClick={(e) => {
+                e.stopPropagation();
+                handleSettingsClick();
+              }} title="Settings">
                 <Settings size={14} />
               </ActionButton>
               <ActionButton title="More options">

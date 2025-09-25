@@ -4,14 +4,23 @@ export interface WebSocketMessage {
     [key: string]: any;
 }
 
+export interface ArtifactItem {
+    name?: string;
+    filename?: string;
+    type?: string;
+    content?: string;
+    language?: string;
+    [key: string]: any;
+}
+
 export interface WebSocketCallbacks {
     onNode?: (name: string, step?: number) => void;
     onClarify?: (question: string) => void;
     onTodos?: (markdown: string) => void;
-    onCode?: (text: string, filename: string) => void;
+    onCode?: (text: string, filename?: string) => void;
     onStdout?: (text: string) => void;
     onStderr?: (text: string) => void;
-    onArtifacts?: (items: any[]) => void;
+    onArtifacts?: (items: ArtifactItem[]) => void;
     onAnswer?: (text: string) => void;
     onError?: (detail: string) => void;
     onConnect?: () => void;
@@ -32,7 +41,6 @@ export interface FileUpload {
 export class AIWebSocketService {
     private ws: WebSocket | null = null;
     private callbacks: WebSocketCallbacks = {};
-    private runId: string;
     private baseUrl: string;
     private reconnectAttempts = 0;
     private maxReconnectAttempts = 3;
@@ -41,21 +49,16 @@ export class AIWebSocketService {
 
     constructor(baseUrl: string = 'ws://localhost:8000') {
         this.baseUrl = baseUrl;
-        this.runId = this.generateRunId();
-    }
-
-    private generateRunId(): string {
-        return `run_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     }
 
     setCallbacks(callbacks: WebSocketCallbacks) {
         this.callbacks = callbacks;
     }
 
-    async connect(): Promise<void> {
+    async connect(chatId: string): Promise<void> {
         return new Promise((resolve, reject) => {
             try {
-                const wsUrl = `${this.baseUrl}/ws/assist?run_id=${this.runId}`;
+                const wsUrl = `${this.baseUrl}/ws/assist?run_id=${chatId}`;
                 this.ws = new WebSocket(wsUrl);
 
                 this.ws.onopen = () => {
@@ -83,7 +86,7 @@ export class AIWebSocketService {
                         this.reconnectAttempts++;
                         setTimeout(() => {
                             console.log(`Reconnecting... (attempt ${this.reconnectAttempts})`);
-                            this.connect();
+                            this.connect(chatId);
                         }, this.reconnectDelay * this.reconnectAttempts);
                     }
                 };
@@ -289,13 +292,8 @@ export class AIWebSocketService {
         return this.ws?.readyState === WebSocket.OPEN;
     }
 
-    getRunId(): string {
-        return this.runId;
-    }
-
     // Generate new run ID for new conversations
     newConversation() {
-        this.runId = this.generateRunId();
         this.uploadQueue.clear();
     }
 

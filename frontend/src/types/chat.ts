@@ -12,7 +12,7 @@ export interface Message {
     isUser: boolean;
     timestamp: Date;
     hasArtifact?: boolean;
-    artifactType?: 'code' | 'document' | 'chart' | 'html';
+    artifactType?: string;
     artifactContent?: string;
     artifactLanguage?: string;
     artifactFilename?: string;
@@ -30,7 +30,7 @@ export interface AttachedFile {
 
 export interface Artifact {
     id: string;
-    type: 'code' | 'document' | 'chart' | 'html';
+    type: string;
     title: string;
     content: string;
     language?: string;

@@ -440,7 +440,7 @@ class CodeSandbox:
             
         code_obj = {
             "filename": code_filename or "cell.py",
-            "code": code_to_run or "",
+            "text": code_to_run or "",
         }
 
         return ExecResult(

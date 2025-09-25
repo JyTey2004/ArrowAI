@@ -6,6 +6,7 @@ class WSState(BaseModel):
     # identity
     base: str
     run_id: str
+    messages: List[Dict[str, Any]]  # chat messages so far
     text: str
     files: List[str]
     
@@ -18,7 +19,7 @@ class WSState(BaseModel):
     done: bool
     
     # execution artifacts
-    code: str
+    code: Dict[str, Any]
     stdout: str
     stderr: str
     artifacts: List[Dict[str, Any]]
