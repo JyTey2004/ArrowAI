@@ -10,7 +10,7 @@ def add_view_urls(artifacts, run_id: str, base: str):
         rel = _strip_run_prefix(str(a.get("path", "")), run_id)
         a2 = dict(a)
         a2["path"] = rel
-        a2["view_url"] = f"{base}/artifacts/{run_id}/view?path={quote(rel)}"
+        a2["view_url"] = f"{base}/artifacts/{run_id}/download?path={quote(rel)}"
         out.append(a2)
     return out
 
@@ -22,7 +22,7 @@ def views_markdown(artifacts, run_id: str, base: str) -> str:
         name = a.get("name", "")
         rel = _strip_run_prefix(str(a.get("path", "")), run_id)
         if os.path.splitext(name)[1].lower() in exts:
-            url = f"{base}/artifacts/{run_id}/view?path={quote(rel)}"
+            url = f"{base}/artifacts/{run_id}/download?path={quote(rel)}"
             # Build markdown link ourselves; LLM won’t rewrite this string
-            lines.append(f"- {name} — [{url}]({url})")
+            lines.append(f"[{name}]({url})")
     return "\n".join(lines) or "(no viewable artifacts yet)"

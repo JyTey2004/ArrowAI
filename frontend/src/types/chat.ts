@@ -15,6 +15,7 @@ export interface Message {
     artifactType?: 'code' | 'document' | 'chart' | 'html';
     artifactContent?: string;
     artifactLanguage?: string;
+    artifactFilename?: string;
     files?: AttachedFile[];
 }
 
@@ -33,6 +34,7 @@ export interface Artifact {
     title: string;
     content: string;
     language?: string;
+    filename?: string;
     messageId?: string;
     createdAt?: Date;
     updatedAt?: Date;
@@ -49,7 +51,7 @@ export interface WebSocketEventHandlers {
     onNode?: (name: string, step?: number) => void;
     onClarify?: (question: string) => void;
     onTodos?: (markdown: string) => void;
-    onCode?: (text: string) => void;
+    onCode?: (text: string, filename?: string) => void;
     onStdout?: (text: string) => void;
     onStderr?: (text: string) => void;
     onArtifacts?: (items: any[]) => void;

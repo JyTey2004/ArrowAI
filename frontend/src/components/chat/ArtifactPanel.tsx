@@ -299,21 +299,24 @@ export const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     }
   }, [artifact]);
 
-  const handleDownload = useCallback(() => {
+  const handleDownload = () => {
     if (!artifact?.content) return;
-    const ext = inferExtension(artifact.language, artifact.type === 'document' ? 'md' : 'txt');
-    const filename = `${(artifact.title || 'artifact')
-      .toLowerCase()
-      .replace(/[^\w\-]+/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '')}.${ext}`;
 
-    const blob = new Blob([artifact.content], { type: 'text/plain;charset=utf-8' });
+    const blob = new Blob([artifact.content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    const a = document.createElement('a');
+    a.href = url;
+
+    // Use the filename if available, otherwise generate one
+    const downloadName = artifact.filename ||
+      `${artifact.title.toLowerCase().replace(/\s+/g, '-')}.${artifact.language || 'txt'}`;
+
+    a.download = downloadName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, [artifact]);
+  };
 
   const codeLanguage = useMemo(() => normalizeLang(artifact?.language), [artifact]);
 
@@ -347,18 +350,25 @@ export const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     <PanelContainer $isExpanded={isExpanded}>
       <PanelHeader>
         <HeaderInfo>
-          <IconContainer>{getArtifactIcon(artifact.type)}</IconContainer>
+          <IconContainer>
+            {getArtifactIcon(artifact.type)}
+          </IconContainer>
           <HeaderText>
-            <h3>{artifact.title}</h3>
+            <h3>{artifact.filename || artifact.title}</h3>
             <p>{getArtifactTypeLabel(artifact.type)}</p>
           </HeaderText>
         </HeaderInfo>
+
         <HeaderActions>
-          <ActionButton onClick={handleDownload} title="Download"><Download size={14} /></ActionButton>
+          <ActionButton onClick={handleDownload} title="Download">
+            <Download size={14} />
+          </ActionButton>
           <ActionButton onClick={onToggleExpand} title={isExpanded ? 'Split View' : 'Full Screen'}>
             {isExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
           </ActionButton>
-          <ActionButton onClick={onClose} $variant="danger" title="Close"><X size={14} /></ActionButton>
+          <ActionButton onClick={onClose} $variant="danger" title="Close">
+            <X size={14} />
+          </ActionButton>
         </HeaderActions>
       </PanelHeader>
 

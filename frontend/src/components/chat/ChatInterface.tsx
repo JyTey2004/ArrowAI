@@ -754,8 +754,12 @@ export const ChatInterface: React.FC = () => {
                             <ArtifactIcon>
                               {getArtifactIcon(artifact.type)}
                             </ArtifactIcon>
-                            <ArtifactTitle>{artifact.title}</ArtifactTitle>
-                            <ArtifactMeta>{artifact.language || artifact.type}</ArtifactMeta>
+                            <ArtifactTitle>
+                              {artifact.filename || artifact.title}
+                            </ArtifactTitle>
+                            <ArtifactMeta>
+                              {artifact.language || artifact.type}
+                            </ArtifactMeta>
                           </ArtifactHeader>
                         </ArtifactPreview>
                       ))}

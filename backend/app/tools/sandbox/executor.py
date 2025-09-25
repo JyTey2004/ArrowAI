@@ -38,7 +38,6 @@ import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from app.core.logging import get_logger
-
 from app.utils.sanitization.code_extracters import _extract_python
 
 logger = get_logger(__name__)
@@ -52,18 +51,19 @@ class LLMClient:
 
 @dataclasses.dataclass
 class ExecRequest:
-    code: str
+    code: Optional[str] = None
     language: str = "python"
-    files_in: Optional[List[Dict[str, str]]] = None  # e.g., [{"name":"leads.csv","path":"tmp/leads.csv"}]
+    files_in: Optional[List[Dict[str, str]]] = None
     timeout_s: Optional[int] = None
-    task: Optional[str] = None  # short description of what this cell should achieve
-    pip: Optional[List[str]] = None  # list of packages to ensure are installed
-    use_llm_writer: bool = False  # if True, will ask code_llm to write/transform code first
-    repair_attempts: int = 2 
+    task: Optional[str] = None
+    pip: Optional[List[str]] = None
+    use_llm_writer: bool = False
+    repair_attempts: int = 2
 
 @dataclasses.dataclass
 class ExecResult:
     ok: bool
+    code: Optional[Dict[str, Any]]  # {"filename": str, "code": str} or None if error
     stdout: str
     stderr: str
     display: Optional[Any]
@@ -73,16 +73,10 @@ class ExecResult:
 # ----------------------------- Kernel -----------------------------------------
 
 class Kernel:
-    """One stateful Python execution context per run/session.
-
-    Keeps a persistent globals() dict so later cells can access variables
-    defined by earlier ones. Also tracks a current working directory.
-    """
-
+    """One stateful Python execution context per run/session."""
     def __init__(self, run_dir: pathlib.Path):
         self.run_dir = run_dir
         self.run_dir.mkdir(parents=True, exist_ok=True)
-        # user namespace for exec/eval
         self.globals: Dict[str, Any] = {
             "__name__": "__sandbox__",
             "__file__": str(self.run_dir / "__cell__.py"),
@@ -90,12 +84,10 @@ class Kernel:
         }
         self.locals: Dict[str, Any] = self.globals
 
-    # ------------------------- Execution --------------------------------------
     def exec_code(self, code: str, timeout_s: Optional[int] = None) -> Tuple[str, str, Optional[Any]]:
         """Execute *Python* code in this kernel, capturing stdout/stderr."""
         normalized = textwrap.dedent(code)
         last_value: Optional[Any] = None
-
         try:
             compiled = compile(normalized, str(self.run_dir / "__cell__.py"), "exec")
         except SyntaxError:
@@ -121,7 +113,6 @@ class Kernel:
                 import traceback
                 traceback.print_exc(file=stderr_buf)
             finally:
-                # restore process CWD no matter what
                 try:
                     os.chdir(old_cwd)
                 except Exception:
@@ -142,7 +133,7 @@ class Kernel:
 # --------------------------- Sandbox (Facade) ---------------------------------
 
 class CodeSandbox:
-    """High‑level facade managing kernels by run_id and CEL.md updates."""
+    """High-level facade managing kernels by run_id and CEL.md updates."""
 
     def __init__(self, base_tmp_dir: str = "tmp"):
         self.base_tmp = pathlib.Path(base_tmp_dir).resolve()
@@ -160,9 +151,7 @@ class CodeSandbox:
 
     # ---------- Package management ----------
     def ensure_packages(self, packages: Iterable[str]) -> Tuple[bool, str]:
-        """Install packages via pip into the current environment.
-        Returns (ok, log). Intended for demo usage.
-        """
+        """Install packages via pip into the current environment."""
         if not packages:
             return True, ""
         cmd = [sys.executable, "-m", "pip", "install", "--upgrade", *packages]
@@ -187,7 +176,7 @@ class CodeSandbox:
                 data = p.read_bytes()
             except Exception:
                 continue
-            rel = p.relative_to(run_dir)  # <— was run_dir.parent
+            rel = p.relative_to(run_dir)
             artifacts.append({
                 "name": p.name,
                 "path": str(rel),
@@ -195,7 +184,6 @@ class CodeSandbox:
                 "sha256": hashlib.sha256(data).hexdigest()[:12],
             })
         return artifacts
-
 
     def _append_cel_step(
         self,
@@ -206,11 +194,9 @@ class CodeSandbox:
         artifacts: List[Dict[str, Any]],
         evaluation_line: str = "PENDING",
     ) -> None:
-        run_dir = self._run_dir(run_id)
         cel = self.cel_path(run_id)
         cel.parent.mkdir(parents=True, exist_ok=True)
         when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
         art_lines = "\n".join(
             f"- {a['name']}: `{a['path']}` (size={a['size']}, sha256={a['sha256']})" for a in artifacts
         )
@@ -219,30 +205,42 @@ class CodeSandbox:
 **When:** {when}
 **Inputs:** {inputs_summary}
 **What I did:**
-""".rstrip("\n") + "\n" + "\n".join(f"- {b}" for b in what_i_did) + "\n" + f"""
+""".rstrip("\n") + "\n" + "\n".join(f"- {b}" for b in what_i_did if b) + "\n" + f"""
 **Artifacts:**
 {art_lines}
 
 **Next steps:**
-- (fill next steps)
 **Evaluation (by Evaluator):** {evaluation_line}
 """
         header = "# Context Engineering Log (CEL)\n\n"
         prev = cel.read_text() if cel.exists() else header
         cel.write_text(prev + block)
 
-    def _update_last_evaluation(self, run_id: str, new_line: str) -> None:
+    @staticmethod
+    def _extract_json_blob(text: str) -> dict:
+        s, e = text.find("{"), text.rfind("}")
+        if s == -1 or e == -1 or e <= s:
+            raise ValueError("Evaluator did not return JSON.")
+        return json.loads(text[s:e+1])
+
+    def _update_last_eval_block(self, run_id: str, verdict: str, eval_text: str, output_summary: str) -> None:
+        """Replace last '**Evaluation (by Evaluator):' with a structured block."""
         cel = self.cel_path(run_id)
         text = cel.read_text() if cel.exists() else ""
         if not text:
             return
-        updated = text.rsplit("**Evaluation (by Evaluator):", 1)
-        if len(updated) == 2:
-            prefix, tail = updated
-            # Replace up to the end of line
-            tail = tail.split("\n", 1)
-            tail = (" " + new_line + "\n" + (tail[1] if len(tail) == 2 else ""))
-            cel.write_text(prefix + "**Evaluation (by Evaluator):" + tail)
+        parts = text.rsplit("**Evaluation (by Evaluator):**", 1)
+        if len(parts) != 2:
+            return
+        prefix, tail = parts
+        tail_split = tail.split("\n", 1)
+        remainder = tail_split[1] if len(tail_split) == 2 else ""
+        block = (
+            f" {verdict}\n"
+            f"**Eval:** {eval_text}\n"
+            f"**Output summary:** {output_summary}\n"
+        )
+        cel.write_text(prefix + "**Evaluation (by Evaluator):" + block + remainder)
 
     # ---------- LLM prompts ----------
     def _build_writer_prompt(self, task: str, context_preview: str) -> str:
@@ -256,15 +254,20 @@ class CodeSandbox:
             f"Preview of namespace/files:\n{context_preview}\n"
         )
 
-
     def _build_eval_prompt(self, task: str, stdout: str, stderr: str, artifacts: List[Dict[str, Any]]) -> str:
-        arts = json.dumps(artifacts, indent=2)
+        payload = {
+            "task": task,
+            "stdout": (stdout or "")[:20000],
+            "stderr": (stderr or "")[:8000],
+            "files_out": artifacts or [],
+            "code_filename": "",  
+        }
         return (
-            "You are a strict evaluator. Use CEL.md below as the source of truth for state and artifacts.\n"
-            "Return exactly ONE line: PASS/FAIL — brief reason; completeness, correctness, evidence, hygiene (0..1)\n\n"
-            f"Task:\n{task}\n\nSTDOUT:\n{stdout[:4000]}\n\nSTDERR:\n{stderr[:2000]}\n\nARTIFACTS (scan):\n{arts[:4000]}\n"
+            "Given the task, stdout, stderr, and files produced by a Python cell, evaluate how well the task was accomplished and give the code a filename.\n"
+            "Inputs JSON below. Return ONE JSON object with keys: eval, verdict, output_summary, code_filename.\n"
+            + json.dumps(payload, ensure_ascii=False)
         )
-        
+
     def _build_repair_prompt(self, task: str, code: str, stdout: str, stderr: str) -> str:
         return (
             "You wrote a Python cell for the task below, but it failed.\n"
@@ -275,7 +278,7 @@ class CodeSandbox:
             "Guidance:\n- Use CWD-relative paths.\n- Prefer simple, explicit code.\n"
             "- If files are missing, create them or handle gracefully.\n"
         )
-    
+
     def _has_error(self, stderr: str) -> bool:
         return ("Traceback (most recent call last)" in (stderr or "")) or ("[Sandbox] Timeout" in (stderr or ""))
 
@@ -290,10 +293,7 @@ class CodeSandbox:
         stderr: str,
         display: Optional[Any],
     ) -> Tuple[str, str, str, Optional[Any], int]:
-        """
-        Attempt to auto-repair failed code using the LLM up to req.repair_attempts times.
-        Returns: (final_code, stdout, stderr, display, attempts_used)
-        """
+        """Attempt to auto-repair failed code using the LLM up to req.repair_attempts times."""
         attempts_used = 0
         if not code_llm or not req.task or req.repair_attempts <= 0:
             return code, stdout, stderr, display, attempts_used
@@ -301,13 +301,12 @@ class CodeSandbox:
         while attempts_used < req.repair_attempts and self._has_error(stderr):
             prompt = self._build_repair_prompt(req.task, code, stdout, stderr)
             fixed = code_llm.generate(prompt)
-            fixed = _extract_python(fixed)           # strip markdown fences if any
+            fixed = _extract_python(fixed)
             code = fixed
             stdout, stderr, display = kernel.exec_code(code, timeout_s=req.timeout_s)
             attempts_used += 1
 
         return code, stdout, stderr, display, attempts_used
-
 
     # ---------- Public API ----------
     def exec_cell(
@@ -321,11 +320,10 @@ class CodeSandbox:
         cel_file = self.cel_path(run_id)
         cel_text = ""
         if cel_file.exists():
-            # keep it reasonable; trim if your model has small context
             cel_text = cel_file.read_text(encoding="utf-8", errors="ignore")
             if len(cel_text) > 20000:
-                cel_text = cel_text[-20000:]  # last 20k chars
-                
+                cel_text = cel_text[-20000:]
+
         if req.language.lower() != "python":
             raise ValueError("Only Python is supported at the moment")
 
@@ -337,36 +335,39 @@ class CodeSandbox:
         if req.pip:
             ok, pip_log = self.ensure_packages(req.pip)
             if not ok:
-                # proceed but capture the error in stderr later
                 pip_log = "[pip install failed]\n" + pip_log
 
         # (6) LLM code writer (optional)
-        code_to_run = _extract_python(req.code)
-        
-        writer_note = None
-        if req.use_llm_writer and code_llm and req.task:
-            # Small preview of current kernel namespace + files
-            ns_keys = sorted([k for k in list(kernel.globals.keys()) if not k.startswith("__")])
-            files = [str(p.relative_to(run_dir)) for p in run_dir.rglob("*") if p.is_file()]
-            preview = "Namespace keys: " + ", ".join(ns_keys[:50]) + "\nFiles: " + ", ".join(files[:50])
+        if not req.code and not req.use_llm_writer:
+            raise ValueError("No code provided and use_llm_writer is False")
 
-            prompt = self._build_writer_prompt(req.task, preview)
-            cel_prompt = ("CEL.md (context):\n" + cel_text + "\n\n" + prompt)
+        code_to_run = ""
+        writer_note = None  # <-- ensure defined in both paths
 
-            # Always include CEL.md as the sole context file (if present)
-            cel_file = self.cel_path(run_id)
-            code_to_run = code_llm.generate(
-                cel_prompt,
-                files=[str(cel_file)] if cel_file.exists() else None,
-            )
-            writer_note = "code generated by LLM (context: CEL.md)"
+        if req.code:
+            code_to_run = _extract_python(req.code)
+        else:
+            if req.use_llm_writer and code_llm and req.task:
+                ns_keys = sorted([k for k in list(kernel.globals.keys()) if not k.startswith("__")])
+                files = [str(p.relative_to(run_dir)) for p in run_dir.rglob("*") if p.is_file()]
+                preview = "Namespace keys: " + ", ".join(ns_keys[:50]) + "\nFiles: " + ", ".join(files[:50])
+
+                prompt = self._build_writer_prompt(req.task, preview)
+                cel_prompt = ("CEL.md (context):\n" + cel_text + "\n\n" + prompt)
+
+                cel_file = self.cel_path(run_id)
+                code_to_run = code_llm.generate(
+                    cel_prompt,
+                    files=[str(cel_file)] if cel_file.exists() else None,
+                )
+                writer_note = "code generated by LLM (context: CEL.md)"
 
         # (1) Execute
         stdout, stderr, display = kernel.exec_code(code_to_run, timeout_s=req.timeout_s)
         if pip_log:
             stderr = pip_log + "\n" + (stderr or "")
-            
-        # (2b) LLM auto-repair (optional)
+
+        # (2b) Auto-repair
         attempts_used = 0
         code_to_run, stdout, stderr, display, attempts_used = self._maybe_repair_with_llm(
             run_id=run_id,
@@ -378,8 +379,8 @@ class CodeSandbox:
             stderr=stderr,
             display=display,
         )
-        
-        # (3) Artifact scan (tmp access is inherent; run_dir is tmp/run_id)
+
+        # (3) Artifact scan
         artifacts = self._artifact_index(run_dir)
 
         # (4) Summarize for CEL
@@ -392,35 +393,64 @@ class CodeSandbox:
                 "Executed Python cell in persistent kernel",
                 "Installed packages: " + (", ".join(req.pip) if req.pip else "none"),
                 attempts_used and f"Repaired code with LLM {attempts_used} time(s)",
-                "Captured stdout/stderr and scanned artifacts"
+                "Captured stdout/stderr and scanned artifacts",
             ],
             artifacts=artifacts,
             evaluation_line="PENDING",
         )
-        
+
         logger.info(f"exec_cell: run_id={run_id}, final code:\n{code_to_run}\n--- end code ---\n\n")
 
         # (5) LLM evaluation (optional)
+        verdict = None
+        eval_text = ""
+        output_summary = ""
+        code_filename = ""
+
         if eval_llm and req.task:
             cel_file = self.cel_path(run_id)
             cel_text = cel_file.read_text(encoding="utf-8", errors="ignore") if cel_file.exists() else ""
-            eval_prompt = ("CEL.md (context):\n" + cel_text + "\n\n" +
-                        self._build_eval_prompt(req.task, stdout, stderr, artifacts))
-            verdict = eval_llm.generate(eval_prompt).strip()
-            self._update_last_evaluation(run_id, verdict)
-            
-        if 'FAIL' in (verdict if eval_llm and req.task else ''):
+            eval_prompt = ("CEL.md (context):\n" + cel_text[-20000:] + "\n\n" +
+                           self._build_eval_prompt(req.task, stdout, stderr, artifacts))
+            raw = eval_llm.generate(eval_prompt).strip()
+            try:
+                obj = self._extract_json_blob(raw)
+                verdict = (obj.get("verdict") or "").strip()
+                eval_text = (obj.get("eval") or "").strip()
+                output_summary = (obj.get("output_summary") or "").strip()
+                code_filename = (obj.get("code_filename") or "").strip()
+            except Exception as e:
+                verdict = f"FAIL — evaluator JSON parse error: {e}"
+                eval_text = "Evaluator did not return valid JSON."
+                output_summary = (stdout or "")[:800]
+                code_filename = f"cell.py"
+
+            self._update_last_eval_block(run_id, verdict, eval_text, output_summary)
+
+        if verdict and isinstance(verdict, str) and verdict.upper().startswith("FAIL"):
             ok = False
         else:
             ok = ("Traceback (most recent call last)" not in stderr) and ("[Sandbox] Timeout" not in stderr)
+
+        final_summary = output_summary or summary
+        
+        # If there is error, we do not return the code that was run
+        if not ok:
+            code_to_run = None
             
+        code_obj = {
+            "filename": code_filename or "cell.py",
+            "code": code_to_run or "",
+        }
+
         return ExecResult(
             ok=ok,
+            code=code_obj,
             stdout=stdout,
             stderr=stderr,
             display=display,
             files_out=artifacts,
-            summary=summary,
+            summary=final_summary,
         )
 
     # ---------- Helpers ----------
@@ -431,7 +461,6 @@ class CodeSandbox:
             "task": (req.task[:200] + "…") if req.task else None,
             "writer": writer_note,
         }
-        # Drop Nones
         fields = {k: v for k, v in fields.items() if v is not None}
         return json.dumps(fields)
 
@@ -446,11 +475,3 @@ class CodeSandbox:
         if err_snip:
             parts.append("STDERR:\n" + err_snip)
         return "\n\n".join(parts)
-
-# -------------------------- Convenience function -----------------------------
-
-def ensure_dir(path: str | os.PathLike) -> pathlib.Path:
-    p = pathlib.Path(path)
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-

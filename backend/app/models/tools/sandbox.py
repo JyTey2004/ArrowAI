@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 from typing import Any, List, Optional, Dict
 
 class SandboxExecIn(BaseModel):
-    code: str = Field(..., description="Python cell to execute")
+    code: Optional[str] = Field(..., description="Python cell to execute")
     language: str = "python"
     files_in: Optional[List[Dict[str, str]]] = None  # reserved for future
     timeout_s: Optional[int] = None
@@ -19,6 +19,7 @@ class FileMeta(BaseModel):
 
 class SandboxExecOut(BaseModel):
     ok: bool
+    code: Optional[str] = None
     stdout: str
     stderr: str
     display: Optional[Any] = None

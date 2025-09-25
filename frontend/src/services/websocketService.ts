@@ -8,7 +8,7 @@ export interface WebSocketCallbacks {
     onNode?: (name: string, step?: number) => void;
     onClarify?: (question: string) => void;
     onTodos?: (markdown: string) => void;
-    onCode?: (text: string) => void;
+    onCode?: (text: string, filename: string) => void;
     onStdout?: (text: string) => void;
     onStderr?: (text: string) => void;
     onArtifacts?: (items: any[]) => void;
@@ -116,7 +116,7 @@ export class AIWebSocketService {
                 break;
 
             case 'code':
-                this.callbacks.onCode?.(data.text);
+                this.callbacks.onCode?.(data.text, data.filename);
                 break;
 
             case 'sandbox.stdout':

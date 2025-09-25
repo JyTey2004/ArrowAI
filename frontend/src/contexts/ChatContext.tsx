@@ -127,15 +127,16 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
         });
       },
 
-      onCode: (text) => {
-        // Add code as an artifact
+      onCode: (text, filename) => {
+        // Add code as an artifact with filename
         addMessage({
-          text: '💻 **Code Generated:**',
+          text: filename ? `💻 **Code Generated:** ${filename}` : '💻 **Code Generated:**',
           isUser: false,
           hasArtifact: true,
           artifactType: 'code',
           artifactContent: text,
-          artifactLanguage: 'python', // Assuming Python based on your backend
+          artifactLanguage: detectLanguageFromFilename(filename) || 'python',
+          artifactFilename: filename,
         });
       },
 
@@ -160,12 +161,17 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
       onArtifacts: (items) => {
         if (items && items.length > 0) {
           items.forEach((item, index) => {
+            const filename = item.filename || item.name;
+            const language = detectLanguageFromFilename(filename) || item.language;
+
             addMessage({
-              text: `📎 **Artifact ${index + 1}:** ${item.name || 'Generated Artifact'}`,
+              text: `📎 **Artifact ${index + 1}:** ${filename || 'Generated Artifact'}`,
               isUser: false,
               hasArtifact: true,
               artifactType: item.type || 'document',
               artifactContent: item.content || JSON.stringify(item, null, 2),
+              artifactLanguage: language,
+              artifactFilename: filename,
             });
           });
         }
@@ -272,12 +278,16 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
 
     // If message has an artifact, create it
     if (newMessage.hasArtifact && newMessage.artifactContent) {
+      const artifactTitle = newMessage.artifactFilename ||
+        `${newMessage.artifactType || 'Code'} from message`;
+
       const newArtifact: Artifact = {
         id: `artifact-${Date.now()}`,
         type: newMessage.artifactType || 'code',
-        title: `${newMessage.artifactType || 'Code'} from message`,
+        title: artifactTitle,
         content: newMessage.artifactContent,
         language: newMessage.artifactLanguage,
+        filename: newMessage.artifactFilename,
         messageId: newMessage.id,
       };
       addArtifact(newArtifact);
@@ -452,4 +462,46 @@ export const useChat = () => {
     throw new Error('useChat must be used within ChatContextProvider');
   }
   return context;
+};
+
+// Helper function to detect language from filename
+const detectLanguageFromFilename = (filename?: string): string | undefined => {
+  if (!filename) return undefined;
+
+  const extension = filename.split('.').pop()?.toLowerCase();
+
+  const languageMap: Record<string, string> = {
+    'py': 'python',
+    'js': 'javascript',
+    'ts': 'typescript',
+    'jsx': 'javascript',
+    'tsx': 'typescript',
+    'java': 'java',
+    'cpp': 'cpp',
+    'c': 'c',
+    'cs': 'csharp',
+    'go': 'go',
+    'rs': 'rust',
+    'rb': 'ruby',
+    'php': 'php',
+    'swift': 'swift',
+    'kt': 'kotlin',
+    'scala': 'scala',
+    'r': 'r',
+    'sql': 'sql',
+    'sh': 'bash',
+    'bash': 'bash',
+    'yaml': 'yaml',
+    'yml': 'yaml',
+    'json': 'json',
+    'xml': 'xml',
+    'html': 'html',
+    'css': 'css',
+    'scss': 'scss',
+    'sass': 'sass',
+    'md': 'markdown',
+    'txt': 'text',
+  };
+
+  return extension ? languageMap[extension] : undefined;
 };
