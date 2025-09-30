@@ -1,0 +1,18 @@
+[project]
+name = "code-sandbox"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "boto3>=1.40.40",
+    "fsspec>=2025.9.0",
+    "httpx>=0.28.1",
+    "matplotlib>=3.10.6",
+    "mcp[cli]>=1.15.0",
+    "numpy>=2.2.6",
+    "openai>=1.109.1",
+    "pandas>=2.3.2",
+    "plotly>=6.3.0",
+    "statsmodels>=0.14.5",
+]

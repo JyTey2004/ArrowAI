@@ -1,12 +1,14 @@
 from pydantic import BaseModel
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Annotated
+from langgraph.graph.message import add_messages
 
 
 class WSState(BaseModel):
     # identity
     base: str
     run_id: str
-    messages: List[Dict[str, Any]]  # chat messages so far
+    chat_title: str
+    messages: Annotated[List[Dict[str, Any]], add_messages]
     text: str
     files: List[str]
     
