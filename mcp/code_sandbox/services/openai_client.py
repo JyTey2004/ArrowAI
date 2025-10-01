@@ -75,7 +75,7 @@ class OpenAIClient:
         files: Optional[Iterable[Union[str, Dict[str, Any]]]] = None,  # paths or already-uploaded {"file_id": "..."}
         # responses API extras
         instructions: Optional[str] = None,  # alias for system
-        max_output_tokens: Optional[int] = None,
+        max_output_tokens: Optional[int] = 100000,
         temperature: Optional[float] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Union[str, Dict[str, Any]]] = None,

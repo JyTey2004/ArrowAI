@@ -16,8 +16,9 @@ class CodeExecInput(BaseModel):
     # code: Optional[str] = Field(None, description="Code to execute")
     task: str = Field(..., description="Natural language description of the task to accomplish with the code")
     timeout_s: Optional[int] = 30
-    pip: Optional[List[str]] = None
+    # pip: Optional[List[str]] = None
     files_in: Optional[List[FileIn]] = Field(default_factory=list, description="List of input files to be downloaded before execution")
+    max_steps: int = 7
     repair_attempts: int = 2
 
 class CreateSessionIn(BaseModel):

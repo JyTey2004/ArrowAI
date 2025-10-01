@@ -201,13 +201,21 @@ class CodeSandbox:
     # ---------- Run Log utilities ----------
     def run_log_path(self, thread_id: str) -> pathlib.Path:
         return self._run_dir(thread_id) / "RUN_LOG.md"
+    
+    def _append_run_log(self, thread_id: str, text: str) -> None:
+        logf = self.run_log_path(thread_id)
+        logf.parent.mkdir(parents=True, exist_ok=True)
+        header = "# Run Log\n\n"
+        prev = logf.read_text(encoding="utf-8", errors="ignore") if logf.exists() else header
+        logf.write_text(prev + text + "\n", encoding="utf-8")
 
     def _append_run_step(
         self,
         thread_id: str,
         tool_name: str,
         inputs_summary: str,
-        what_i_did: List[str],
+        attempts_used: int,
+        final_code: str,
         artifacts: List[Dict[str, Any]],
         evaluation_line: str = "PENDING",
     ) -> None:
@@ -218,14 +226,11 @@ class CodeSandbox:
             f"- {a['name']}: `{a['path']}` (size={a['size']})" for a in artifacts
         )
         block = (
-            f"\n## Step: {tool_name}\n"
+            f"### Step: {tool_name}\n"
             f"**When:** {when}\n"
             f"**Inputs:** {inputs_summary}\n"
-            f"**What I did:**\n"
-            + "\n".join(f"- {b}" for b in what_i_did if b)
-            + "\n**Artifacts (outputs/ only):**\n"
-            + (art_lines or "- (none)")
-            + f"\n\n**Next steps:**\n"
+            f"**Final Code ({attempts_used} Fixes):**\n```\n{final_code}\n```\n"
+            f"**Artifacts:**\n{art_lines or '- none'}\n"
             f"**Evaluation:** {evaluation_line}\n"
         )
         header = "# Run Log\n\n"
@@ -334,40 +339,8 @@ class CodeSandbox:
     # ---------- LLM prompts ----------
     def _build_writer_prompt(self, task: str, context_preview: str, run_log: str) -> str:
         return (
-            "Write ONE Python cell to accomplish the task.\n"
-            "Environment captures ONLY STDOUT — nothing is visible unless printed.\n"
-            "Environment:\n"
-            "- CWD is the run directory; you can read files by filename if present.\n"
-            "- A directory named 'outputs' already exists. SAVE **all** files you create under 'outputs/'.\n"
-            "- Convenience variables are provided: OUTPUTS_DIR and INPUTS_DIR (strings with absolute paths).\n"
-            "\n"
-            "HARD RULES:\n"
-            "- Output ONLY raw Python code (no markdown fences).\n"
-            "- NEVER use `return` at top level; do not rely on variable echo. Use print(...) for everything.\n"
-            "- Prefix required diagnostics with 'EVIDENCE:' so they can be parsed.\n"
-            "- After writing each artifact, print: 'ARTIFACT: outputs/<filename>' (relative path under the outputs/ dir).\n"
-            "- Do NOT write files anywhere except under outputs/.\n"
-            "- If a required column or input is missing/unknown, print 'ERROR: <message>' and stop (do not fabricate).\n"
-            "- Always end with: print('DONE')\n"
-            "- If ETL/EDA is required, do it in this cell. Save new outputs under the outputs/ directory.\n"
-            "- Do not validate remote paths or create fake data.\n"
-            "\n"
-            "DO (examples to imitate):\n"
-            "print('EVIDENCE: key=row_count value=', len(df))\n"
-            "print('EVIDENCE: key=date_min value=', str(df[date_col].min()))\n"
-            "print('EVIDENCE: key=unique_year_month value=', ym.to_json(orient=\"records\"))\n"
-            "df.to_csv('outputs/profile.csv', index=False)\n"
-            "print('ARTIFACT: outputs/profile.csv')\n"
-            "with open('outputs/profile_summary.md', 'w', encoding='utf-8') as f:\n"
-            "    f.write('# Profile Summary\\n...')\n"
-            "print('ARTIFACT: outputs/profile_summary.md')\n"
-            "print('DONE')\n"
-            "\n"
-            "DON'T:\n"
-            "# return results  # FORBIDDEN\n"
-            "# df.head()       # Invisible without print\n"
-            "# display(df)     # Invisible here\n"
-            "\n"
+            "Read the RUN_LOG.md and the context of the current namespace/files, all code in RUN_LOG.md is ran and you can access the variables and outputs produced by that code, unless error occured.\n"
+            "Try not to repeat code that has already been run, instead reuse variables and outputs.\n"
             f"Task:\n{task}\n\n"
             f"Run Log (most recent 2000 chars):\n{run_log[-2000:]}\n\n"
             f"Preview of namespace/files:\n{context_preview}\n"
@@ -406,8 +379,6 @@ class CodeSandbox:
             "\n"
             "DO (examples to imitate):\n"
             "print('EVIDENCE: key=row_count value=', len(df))\n"
-            "print('EVIDENCE: key=date_min value=', str(df[date_col].min()))\n"
-            "print('EVIDENCE: key=unique_year_month value=', ym.to_json(orient=\"records\"))\n"
             "df.to_csv('outputs/profile.csv', index=False)\n"
             "print('ARTIFACT: outputs/profile.csv')\n"
             "with open('outputs/profile_summary.md', 'w', encoding='utf-8') as f:\n"
@@ -455,9 +426,11 @@ class CodeSandbox:
         while attempts_used < req.repair_attempts and self._has_error(stderr):
             prompt = self._build_repair_prompt(req.task, code, stdout, stderr)
             fixed = code_llm.generate(prompt)
+            logger.info(f"exec_cell: thread_id={thread_id}, repair attempt {attempts_used+1}, LLM fixed code:\n{fixed}\n--- end fixed code ---\n\n")
             fixed = _extract_python(fixed)
             code = fixed
             stdout, stderr, display = kernel.exec_code(code, timeout_s=req.timeout_s)
+            logger.info(f"exec_cell: thread_id={thread_id}, repair attempt {attempts_used+1}, post-fix exec stdout:\n{stdout}\n--- end stdout ---\n\n")
             attempts_used += 1
 
         return code, stdout, stderr, display, attempts_used
@@ -498,8 +471,10 @@ class CodeSandbox:
             code_to_run = _extract_python(req.code)
         elif req.use_llm_writer and code_llm and req.task:
             ns_keys = sorted([k for k in list(kernel.globals.keys()) if not k.startswith("__")])
-            files = [str(p.relative_to(run_dir)).replace("\\", "/") for p in run_dir.rglob("*") if p.is_file()]
-            preview = "Namespace keys: " + ", ".join(ns_keys[:50]) + "\nFiles: " + ", ".join(files[:50])
+            input_files = list((run_dir / self.inputs_dirname).glob("*"))
+            output_files = list((run_dir / self.outputs_dirname).glob("*"))
+            current_files = list(run_dir.glob("*"))
+            preview = f"Namespace keys: {ns_keys[:50]}\nFiles in {self.inputs_dirname}/: {[f.name for f in input_files][:20]}\nFiles in {self.outputs_dirname}/: {[f.name for f in output_files][:20]}\nAll files in run dir: {[f.name for f in current_files][:20]}"
             
             run_log = self.run_log_path(thread_id).read_text(encoding="utf-8", errors="ignore") if self.run_log_path(thread_id).exists() else "New session."
 
@@ -538,12 +513,8 @@ class CodeSandbox:
             thread_id=thread_id,
             tool_name="sandbox.exec",
             inputs_summary=self._inputs_summary(req, writer_note),
-            what_i_did=[
-                "Executed Python cell in persistent kernel",
-                "Installed packages: " + (", ".join(req.pip) if req.pip else "none"),
-                attempts_used and f"Repaired code with LLM {attempts_used} time(s)",
-                f"Captured stdout/stderr and scanned '{self.outputs_dirname}/' for artifacts",
-            ],
+            attempts_used=attempts_used,
+            final_code=code_to_run,
             artifacts=artifacts,
             evaluation_line="PENDING",
         )

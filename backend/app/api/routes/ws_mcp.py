@@ -116,6 +116,7 @@ CLARIFY_SYSTEM = (
     "You are a careful PM. Decide if the user's request needs clarification to proceed.\n"
     "Clarification is needed if the request is ambiguous, incomplete, or could lead to incorrect execution.\n"
     "If user requests can somewhat be fulfilled, we can proceed without clarification.\n"
+    "However, if the task is navigational (e.g., 'explore the data', 'analyze trends', 'build a model'), we can proceed without clarification.\n"
     "If clarification is needed, ask ONE concise question." 
     "If not, answer exactly 'NO_CLARIFICATION_NEEDED'."
 )
@@ -136,16 +137,14 @@ TODO_SYSTEM = (
 
 
 EXECUTE_SYSTEM = (
-    "You are a senior consultant. You should break down the TODO in CEL.md into manageable 3-7 steps with tasks for tools to solve.\n"
-    "You have a maximum of 7 steps to complete the TODO.\n"
-    "Try not to be too granular; if a step is trivial, combine it with another. Try to accomplish a TODO in CEL.md in one step.\n"
-    "An example of a trivial step is: just exploring a dataset, or loading a file, or printing the first few lines of a dataframe.\n"
-    "Instead, you should combine it with the next step that actually does something useful.\n"
-    "Read the Tool documentation carefully; it will help you understand the capabilities and limitations of each tool."
-    "You should decide the SINGLE next step to execute now. After this task you will be looped back until the task is complete, so break it down.\n"
+    "You are a senior consultant. Your job is to EXECUTE the plan in the TODO list using tools, "
+    "choosing the LARGEST safe step that produces concrete deliverables.\n"
+    "Try not to be too granular; if a step is trivial, combine it with another.\n"
+    "You should decide the SINGLE next step to execute now.\n"
+    "Some tools are Sub-agents that can break down complex tasks into smaller steps and execute them one by one, you should size your steps accordingly.\n"
     "Your task is to read the CEL.md file and:\n"
-        "1. Determine what should be done in this step, be specific about what should be done when writing the filling the Tool schema.\n"
-        "2. Correctly fill in the schema as specific as possible for the tool by reading the tool's documentation\n"
+        "1. Determine what should be done in this step.\n"
+        "2. Be VERY SPECIFIC when filling in the tool schema.\n"
         "3. All files are uploaded to S3, so if a tool requires a file argument, pass it the FULL S3 path\n"
         "4. Specify if output files are expected\n"
     "Note:\n"
@@ -157,13 +156,12 @@ EXECUTE_SYSTEM = (
 
 EXECUTE_SUMMARY_SYSTEM = (
     "You are an execution summarizer. Produce a STRICT JSON object that matches this schema:\n"
-    "ExecSummaryOutput = { summary: str, artifacts: [{name: str, path: str, size?: int}] }\n"
+    "ExecSummaryOutput = { summary: str, artifacts: [{name: str, uri: str, size?: int}] }\n"
     "\n"
     "Inputs you may rely on:\n"
     "- CEL.md (task, steps taken, deliverables)\n"
-    "- TODO list (what was planned)\n"
-    "- Tool outputs (stdout/stderr), manifests, and file lists\n"
     "- The user's original request (first section of CEL.md)\n"
+    "- Tool outputs (stdout/stderr), manifests, and file lists\n"
     "\n"
     "Authoring rules:\n"
     "1) Return ONLY the JSON object (no prose, no code fences, no trailing commas).\n"
@@ -173,13 +171,12 @@ EXECUTE_SUMMARY_SYSTEM = (
     "   - ARTIFACTS: <FILES PRODUCED, IF ANY>\n"
     "   - FEEDBACK: <FEEDBACK BASED ON TOOL OUTPUTS>\n"
     "   - ISSUES: <ANY ERRORS OR BLOCKERS, IF ANY>\n"
-    "3) artifacts: derive ONLY from confirmed file/manifests in sources. One entry per file.\n"
+    "3) artifacts: derive ONLY from confirmed file/manifests in Tool output. One entry per file.\n"
     "   - name: human-friendly filename or title\n"
     "   - uri: full path (s3://bucket/key or http(s)://...)\n"
     "   - size: include if known (bytes); omit if unknown.\n"
     "   - Deduplicate; list only files that actually exist per the sources.\n"
-    "4) If all items in todo list are FULLY complete (No/Negligible Feedback or Issues), begin the summary with 'USER_OBJECTIVE_COMPLETE'.\n"
-    "5) Prefer clear bullet points and short paragraphs; keep it compact but complete (no hard char limit).\n"
+    "4) Prefer clear bullet points and short paragraphs; keep it compact but complete (no hard char limit).\n"
 )
 
 
@@ -344,21 +341,22 @@ async def execute_node(state: MCPState, config: RunnableConfig):
         all_messages = state["messages"]
 
         tool_messages = [m for m in all_messages if isinstance(m, ToolMessage)]
+        
+        tool_content = []
 
         # If last message is a ToolMessage, we pop it and summarize its results first
         if tool_messages:
 
-            tool_content = [m.content for m in tool_messages]
+            for tm in tool_messages:
+                content = tm.content or ""
+                tool_content.append(f"Tool: {tm.name}\nOutput:\n{content}\n")
             
             logger.info(f"Execute node for thread_id={thread_id}, step_idx={state.get('step_idx',0)} , tool messages:\n{tool_messages}\n--- end tool outputs ---\n\n")
-            
-            todo = state.get("todo", "")
 
             resp = await model.ainvoke([
                 {"role": "system", "content": EXECUTE_SUMMARY_SYSTEM},
-                {"role": "user", "content": f"Respect the User Message and Todo List. CEL.md (context):\n{cel_snip[-500:]}"}, # last 500 chars
-                {"role": "user", "content": f"Todo List:\n{todo}"},
-                {"role": "user", "content": f"Tool outputs:\n{tool_content}"},
+                {"role": "user", "content": f"Respect the CEL.md (context):\n{cel_snip[-500:]}"}, # last 500 chars
+                {"role": "user", "content": f"Last Tool outputs:\n{tool_content}"},
             ])
 
             raw = (resp.content or "").strip()
@@ -404,16 +402,6 @@ async def execute_node(state: MCPState, config: RunnableConfig):
                 if summary_art.uri and summary_art.uri not in [a.get("uri") for a in state.get("artifacts", [])]:
                     state["artifacts"].append(summary_art.dict())
 
-            # Completion gate: look for TASK_COMPLETE token at start or anywhere in the summary
-            done = "USER_OBJECTIVE_COMPLETE" in summary_obj.summary
-
-            if done:
-                return {
-                    "messages": all_messages,
-                    "artifacts": state.get("artifacts", []),
-                    "done": True
-                }
-
 
         # Prepend system for policy
         prompt = [
@@ -422,7 +410,8 @@ async def execute_node(state: MCPState, config: RunnableConfig):
             {"role": "user", "content": f"Artifacts:\n{state.get('artifacts', [])}"},
         ]
         
-        # logger.info(f"Execute node for thread_id={thread_id}, step_idx={state.get('step_idx',0)} generating response with prompt:\n{prompt}\n--- end prompt ---\n\n")
+        if tool_content:
+            prompt.append({"role": "user", "content": f"Last Tool outputs:\n{tool_content}"})
         
         resp = await _model_with_tools.ainvoke(prompt)
         
