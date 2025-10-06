@@ -24,7 +24,7 @@ s3c = S3Client(
 host = os.getenv("SANDBOX_HOST", "127.0.0.1")
 port = int(os.getenv("SANDBOX_PORT", "8787"))
 path = os.getenv("SANDBOX_PATH", "/mcp")
-mcp = FastMCP("CodingSubagent", port=port, host=host, mount_path=path)  # or transport="stdio" for stdio
+mcp = FastMCP("CodingSubagent", port=port, host=host, streamable_http_path=path)  # or transport="stdio" for stdio
 sandbox = CodeSandbox(base_tmp_dir="tmp", s3_client=s3c)  # all I/O stays under tmp/
 
 def _setup_logging():

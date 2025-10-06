@@ -30,7 +30,8 @@ router = APIRouter()
 # -----------------------
 DEFAULT_BUCKET = os.environ.get("MCP_BUCKET", "arrowai")
 REGION = os.environ.get("AWS_REGION", "ap-southeast-1")
-SANDBOX_MCP_WS = os.environ.get("SANDBOX_MCP_WS", "http://localhost:8787/mcp")
+CODE_AGENT_MCP_WS = os.environ.get("CODE_AGENT_MCP_WS", "http://localhost:5000/mcp/code_agent")
+RESEARCH_AGENT_MCP_WS = os.environ.get("RESEARCH_AGENT_MCP_WS", "http://localhost:5001/mcp/research_agent")
 
 s3c = S3Client(
     bucket_name=DEFAULT_BUCKET,
@@ -59,8 +60,12 @@ async def _ensure_tools():
             return
         _mcp_client = MultiServerMCPClient(
             {
-                "sandbox": {
-                    "url": SANDBOX_MCP_WS,
+                "code_agent": {
+                    "url": CODE_AGENT_MCP_WS,
+                    "transport": "streamable_http",
+                },
+                "research_agent": {
+                    "url": RESEARCH_AGENT_MCP_WS,
                     "transport": "streamable_http",
                 },
             }
@@ -137,43 +142,54 @@ TODO_SYSTEM = (
 
 
 EXECUTE_SYSTEM = (
-    "You are a senior consultant. Your job is to EXECUTE the plan in the TODO list using tools, "
-    "choosing the LARGEST safe step that produces concrete deliverables.\n"
-    "Try not to be too granular; if a step is trivial, combine it with another.\n"
-    "You should decide the SINGLE next step to execute now.\n"
-    "Some tools are Sub-agents that can break down complex tasks into smaller steps and execute them one by one, you should size your steps accordingly.\n"
-    "Your task is to read the CEL.md file and:\n"
-        "1. Determine what should be done in this step.\n"
-        "2. Be VERY SPECIFIC when filling in the tool schema.\n"
-        "3. All files are uploaded to S3, so if a tool requires a file argument, pass it the FULL S3 path\n"
-        "4. Specify if output files are expected\n"
-    "Note:\n"
+    "You are a project manager at ArrowAI, overseeing task execution.\n"
+    "You specialize in solving the user's request with a multi-step approach.\n"
+    "Use tools available to you to solve the user's request efficiently and proactively.\n\n"
+    
+    "You have access to the following tools:\n"
+    "- Code Agent: Completes task that requires code execution.\n"
+    "- Research Agent: Completes tasks that require web search and information gathering.\n"
+    "Your goal is to complete the user's request by using these tools effectively.\n"
+    "Start by understanding the complete situation before proposing solutions, ask follow up questions if you do not understand.\n"
+    
+    "Response Framework:\n"
+    "  1. Identify the SINGLE next step to take towards completing the user's request.\n"
+    "  2. Gather any necessary information or resources to support this step.\n"
+    "  3. Choose the MOST APPROPRIATE tool to execute this step.\n"
+    "  4. Provide the most DETAILED and SPECIFIC description of this step to the tool schema.\n"
+    
+    "Guidelines:\n"
+    "- When multple tools are possible, choose the one that is most likely to succeed and is the most efficient.\n"
     "- All tool calls are synchronous. If you call the same tool multiple times in parallel, be aware of potential race conditions. For example, if you output 2 tool calls for code execution, they will run independently and give outputs in an unpredictable order.\n"
     "- You should call and execute code once per output. Do not make multiple code call tool calls unless they are completely independent.\n"
+    "- If step requires other files, assume they are in S3 and can be read from there, hence theres no need to mention downloading/uploading.\n"
     "- Always validate and sanitize inputs to tools to prevent injection attacks or unexpected behavior.\n"
-    "If you believe the user's request is fully complete, just output what you delivered instead of tool calls.\n"
+    "- If you believe the user's request is fully complete, just output what you delivered instead of tool calls.\n"
 )
 
 EXECUTE_SUMMARY_SYSTEM = (
-    "You are an execution summarizer. Produce a STRICT JSON object that matches this schema:\n"
-    "ExecSummaryOutput = { summary: str, artifacts: [{name: str, uri: str, size?: int}] }\n"
+    "You are an Quality Assurance (QA) specialist. Produce a STRICT JSON object that matches this schema:\n"
+    "ExecSummaryOutput = { summary: str, artifacts: [{name: str, uri: str, description: str, size?: int}] }\n"
     "\n"
     "Inputs you may rely on:\n"
-    "- CEL.md (task, steps taken, deliverables)\n"
-    "- The user's original request (first section of CEL.md)\n"
-    "- Tool outputs (stdout/stderr), manifests, and file lists\n"
+    "- Context summary (if provided): A summary of all tool calls and execution steps\n"
+    "- CEL.md (An overview of the user's task and context)\n"
+    "- Tool outputs: Current tool outputs\n"
     "\n"
-    "Authoring rules:\n"
+    
+    "Response Framework:\n"
+    "   1. Identify the most critical points from the context and tool outputs.\n"
+    "   2. From the critical points, derive a consise summary of what was done.\n"
+    "   3. This summary should contain everything that happened so the user will know what to do next.\n"
+    "   4. Identify and list all artifacts (files, reports, datasets) that were produced during execution.\n"
+    
+    "Guidelines:\n"
     "1) Return ONLY the JSON object (no prose, no code fences, no trailing commas).\n"
-    "2) summary: Markdown text (no code fences) that fully documents what happened in bullet points in the below format:\n"
-    "   - TASK: <WHAT WAS DONE>\n"
-    "   - RESULTS: <KEY FINDINGS, METRICS, INSIGHTS>\n"
-    "   - ARTIFACTS: <FILES PRODUCED, IF ANY>\n"
-    "   - FEEDBACK: <FEEDBACK BASED ON TOOL OUTPUTS>\n"
-    "   - ISSUES: <ANY ERRORS OR BLOCKERS, IF ANY>\n"
+    "2) summary: Markdown text (no code fences) that fully documents what happened in a short but comprehensive manner.\n"
     "3) artifacts: derive ONLY from confirmed file/manifests in Tool output. One entry per file.\n"
     "   - name: human-friendly filename or title\n"
     "   - uri: full path (s3://bucket/key or http(s)://...)\n"
+    "   - description: a brief description of the artifact\n"
     "   - size: include if known (bytes); omit if unknown.\n"
     "   - Deduplicate; list only files that actually exist per the sources.\n"
     "4) Prefer clear bullet points and short paragraphs; keep it compact but complete (no hard char limit).\n"
@@ -215,7 +231,8 @@ class MCPState(dict):
     need_clarification: bool
     clarifying_question: Optional[str]
     artifacts: List[dict]
-    
+    context_sumary: Optional[str]
+
 class Artifact(BaseModel):
     name: str
     uri: str = Field(..., description="Full URI of the artifact, e.g., s3://bucket/key or http(s)://...")
@@ -337,7 +354,9 @@ async def execute_node(state: MCPState, config: RunnableConfig):
         emit({"event": "node", "name": "execute", "step": state.get("step_idx", 0)})
         
         cel_snip = _read_cel(base_prefix)
-        
+
+        context_summary = state.get("context_summary") or ""
+
         all_messages = state["messages"]
 
         tool_messages = [m for m in all_messages if isinstance(m, ToolMessage)]
@@ -353,11 +372,18 @@ async def execute_node(state: MCPState, config: RunnableConfig):
             
             logger.info(f"Execute node for thread_id={thread_id}, step_idx={state.get('step_idx',0)} , tool messages:\n{tool_messages}\n--- end tool outputs ---\n\n")
 
-            resp = await model.ainvoke([
+            summarize_prompt = [
                 {"role": "system", "content": EXECUTE_SUMMARY_SYSTEM},
-                {"role": "user", "content": f"Respect the CEL.md (context):\n{cel_snip[-500:]}"}, # last 500 chars
-                {"role": "user", "content": f"Last Tool outputs:\n{tool_content}"},
-            ])
+            ]
+            
+            # Context summary
+            if context_summary:
+                summarize_prompt.append({"role": "user", "content": f"Context Summary:\n{context_summary}\n"})
+                
+            summarize_prompt.append({"role": "user", "content": f"CEL.md (context):\n{cel_snip}"})
+            summarize_prompt.append({"role": "user", "content": f"Tool Outputs:\n{tool_content}"})
+
+            resp = await model.ainvoke(summarize_prompt)
 
             raw = (resp.content or "").strip()
             json_text = _extract_json(raw)
@@ -383,9 +409,9 @@ async def execute_node(state: MCPState, config: RunnableConfig):
                     artifacts=[]
                 )
                 logger.warning(f"ExecSummaryOutput validation failed: {ve}")
-            
-            # Write only the markdown summary to CEL.md
-            _append_cel(base_prefix, f"### Step {state.get('step_idx',0)} Summary (Based on Tool Outputs):\n{summary_obj.summary}\n")
+
+            # Update the context summary in state - we replace as this the latest summary will also contain previous summaries
+            context_summary = summary_obj.summary
 
             # Log and keep artifacts in state for downstream tools/UI
             logger.info(
@@ -406,6 +432,7 @@ async def execute_node(state: MCPState, config: RunnableConfig):
         # Prepend system for policy
         prompt = [
             {"role": "system", "content": EXECUTE_SYSTEM},
+            {"role": "user", "content": f"An overview of the all previous tool calls and execution steps:\n{context_summary}"},
             {"role": "user", "content": f"CEL.md (context):\n{cel_snip}"},
             {"role": "user", "content": f"Artifacts:\n{state.get('artifacts', [])}"},
         ]
@@ -419,8 +446,13 @@ async def execute_node(state: MCPState, config: RunnableConfig):
         
         all_messages.append(resp)
 
+        for tool_call in resp.tool_calls or []:
+            logger.info(f"Execute node for thread_id={thread_id}, step_idx={state.get('step_idx',0)} invoking tool call: {tool_call}")
+            await emit({"event": "sandbox.stdout", "text": f"Using tool:{tool_call.get('name')} with args {json.dumps(tool_call.get('args', {}), indent=2)}\n"})
+
         return {
             "messages": all_messages,
+            "context_summary": context_summary,
             "step_idx": state.get("step_idx", 0) + 1,
         }
     except Exception as e:
@@ -461,6 +493,16 @@ async def reply_node(state: MCPState, config: RunnableConfig):
         answer_text = resp.content or "Here is the summary of what was done."
     
         state["messages"].append(AIMessage(content=answer_text))
+        
+        # Extract all s3:// in answer_text as artifacts (if not already present)
+        s3_uris = re.findall(r"s3://[^\s`]+", answer_text) # Get all s3://bucket/key patterns
+        for uri in s3_uris:
+            # update the s3_uris to presigned URLs
+            presigned = s3c.presigned_get(
+                key=uri,
+                expires_in=3600
+            )
+            answer_text = answer_text.replace(uri, presigned)
 
         emit({"event": "answer", "text": answer_text})
         if artifacts:
@@ -493,13 +535,21 @@ async def route_after_execute(state: MCPState, config: RunnableConfig) -> Litera
         if isinstance(last_message, AIMessage):
             if last_message.tool_calls: 
                 return "tools"
-            
+        
+        # If tools were called (step_idx > 0) we append the context_summary to CEL.md
+        if state.get("step_idx", 0) > 0:
+            exec_ctx = config["configurable"]["exec_ctx"]
+            base_prefix = exec_ctx["base_prefix"]
+            context_summary = state.get("context_summary") or ""
+            if context_summary:
+                _append_cel(base_prefix, f"## Execution Summary:\n{context_summary}\n")
+                logger.info(f"Route after execute appended context summary to CEL.md for thread_id={config['configurable']['thread_id']}, step_idx={state.get('step_idx',0)}:\n{context_summary}\n--- end summary ---\n\n")
+        
         return "reply"
 
     except Exception as e:
         logger.exception(f"Route after execute error: {e}")
         raise
-
 
 
 # -----------------------

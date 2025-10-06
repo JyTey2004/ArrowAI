@@ -216,7 +216,8 @@ class S3Client:
     # Downloads
     # ---------------------------
     def get_bytes(self, key: str, version_id: str | None = None) -> Tuple[bytes, Dict[str, Any]]:
-        kwargs = {"Bucket": self.bucket, "Key": key}
+        parsed_key = self.parse_s3_uri(key) if key.startswith("s3://") else key
+        kwargs = {"Bucket": self.bucket, "Key": parsed_key}
         if version_id:
             kwargs["VersionId"] = version_id
         obj = self.s3.get_object(**kwargs)
@@ -243,7 +244,8 @@ class S3Client:
         response_content_type: str | None = None,
         response_content_disposition: str | None = None,
     ) -> str:
-        params: Dict[str, Any] = {"Bucket": self.bucket, "Key": key}
+        parsed_key = self.parse_s3_uri(key) if key.startswith("s3://") else key
+        params: Dict[str, Any] = {"Bucket": self.bucket, "Key": parsed_key}
         if version_id:
             params["VersionId"] = version_id
         if response_content_type:

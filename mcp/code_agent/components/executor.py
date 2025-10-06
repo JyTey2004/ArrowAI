@@ -38,6 +38,8 @@ import threading
 import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from components.models import File
+
 import logging
 from utils.code_extracters import _extract_python
 from aws.s3_client import S3Client  # NEW
@@ -202,10 +204,30 @@ class CodeSandbox:
     def run_log_path(self, thread_id: str) -> pathlib.Path:
         return self._run_dir(thread_id) / "RUN_LOG.md"
     
+    def cel_log_path(self, thread_id: str) -> pathlib.Path:
+        return self._run_dir(thread_id) / "CEL.md"
+    
+    def artifact_log_path(self, thread_id: str) -> pathlib.Path:
+        return self._run_dir(thread_id) / "ARTIFACTS.md"
+    
     def _append_run_log(self, thread_id: str, text: str) -> None:
         logf = self.run_log_path(thread_id)
         logf.parent.mkdir(parents=True, exist_ok=True)
         header = "# Run Log\n\n"
+        prev = logf.read_text(encoding="utf-8", errors="ignore") if logf.exists() else header
+        logf.write_text(prev + text + "\n", encoding="utf-8")
+        
+    def _append_cel_log(self, thread_id: str, text: str) -> None:
+        logf = self.cel_log_path(thread_id)
+        logf.parent.mkdir(parents=True, exist_ok=True)
+        header = "# CEL Log\n\n"
+        prev = logf.read_text(encoding="utf-8", errors="ignore") if logf.exists() else header
+        logf.write_text(prev + text + "\n", encoding="utf-8")
+
+    def _append_artifact_log(self, thread_id: str, text: str) -> None:
+        logf = self.artifact_log_path(thread_id)
+        logf.parent.mkdir(parents=True, exist_ok=True)
+        header = "# Artifacts\n\n"
         prev = logf.read_text(encoding="utf-8", errors="ignore") if logf.exists() else header
         logf.write_text(prev + text + "\n", encoding="utf-8")
 
@@ -213,24 +235,25 @@ class CodeSandbox:
         self,
         thread_id: str,
         tool_name: str,
-        inputs_summary: str,
-        attempts_used: int,
-        final_code: str,
+        task: str,
+        # attempts_used: int,
+        # final_code: str,
         artifacts: List[Dict[str, Any]],
         evaluation_line: str = "PENDING",
     ) -> None:
         logf = self.run_log_path(thread_id)
         logf.parent.mkdir(parents=True, exist_ok=True)
-        when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         art_lines = "\n".join(
-            f"- {a['name']}: `{a['path']}` (size={a['size']})" for a in artifacts
+            f"- {a['name']}: `{a['path']}` (desc: {a.get('description', 'No description')}) (size={a['size']})" for a in artifacts
         )
         block = (
-            f"### Step: {tool_name}\n"
-            f"**When:** {when}\n"
-            f"**Inputs:** {inputs_summary}\n"
-            f"**Final Code ({attempts_used} Fixes):**\n```\n{final_code}\n```\n"
-            f"**Artifacts:**\n{art_lines or '- none'}\n"
+            # f"### Step: {tool_name}\n"
+            # f"**When:** {when}\n"
+            # f"**Inputs:** {inputs_summary}\n"
+            f"**Task:** {task}\n"
+            # f"**Final Code ({attempts_used} Fixes):**\n```\n{final_code}\n```\n"
+            # f"**Artifacts:**\n{art_lines or '- none'}\n"
             f"**Evaluation:** {evaluation_line}\n"
         )
         header = "# Run Log\n\n"
@@ -252,7 +275,8 @@ class CodeSandbox:
         block = (
             f" {verdict}\n"
             f"**Eval:** {eval_text}\n"
-            f"**Output summary:** {output_summary}\n"
+            f"**Output summary:** {output_summary}\n\n"
+            "---\n\n"
         )
         run_log.write_text(prefix + "**Evaluation (by Evaluator):**" + block + remainder)
 
@@ -327,7 +351,7 @@ class CodeSandbox:
                 )
                 out.append({
                     "name": a["name"],
-                    "uri": f"s3://{self.s3.bucket}/{key}",
+                    "path": f"s3://{self.s3.bucket}/{key}",
                     "size": a["size"],
                 })
             except Exception as e:
@@ -337,20 +361,23 @@ class CodeSandbox:
         return out
 
     # ---------- LLM prompts ----------
-    def _build_writer_prompt(self, task: str, context_preview: str, run_log: str) -> str:
+    def _build_writer_prompt(self, task: str, context_preview: str, execution_context: str, artifact_log: str, cel_log: str) -> str:
         return (
-            "Read the RUN_LOG.md and the context of the current namespace/files, all code in RUN_LOG.md is ran and you can access the variables and outputs produced by that code, unless error occured.\n"
-            "Try not to repeat code that has already been run, instead reuse variables and outputs.\n"
+            "Read the CEL Log and understand the user goal and the task that works towards it.\n"
+            "Read the All Execution Summary and Artifacts as they will provide you context about the current task.\n"
+            "Read the namespaces carefully as you can use them.\n"
             f"Task:\n{task}\n\n"
-            f"Run Log (most recent 2000 chars):\n{run_log[-2000:]}\n\n"
-            f"Preview of namespace/files:\n{context_preview}\n"
+            f"CEL Log:\n{cel_log}\n"
+            f"All Execution Summary:\n{execution_context}\n\n"
+            f"Artifacts:\n{artifact_log}\n"
+            f"Preview of namespace:\n{context_preview}\n"
         )
 
     def _build_eval_prompt(self, task: str, stdout: str, stderr: str, code: str, artifacts: List[Dict[str, Any]]) -> str:
         payload = {
             "task": task,
             "code": code,
-            "stdout": (stdout or "")[:20000],
+            "stdout": (stdout or "")[:2000],
             "stderr": (stderr or "")[:8000],
             "files_out": artifacts or [],
             "code_filename": "",
@@ -442,6 +469,7 @@ class CodeSandbox:
         req: ExecRequest,
         code_llm: Optional[LLMClient] = None,
         eval_llm: Optional[LLMClient] = None,
+        execution_context: str = "",
     ) -> ExecResult:
         """Execute a cell with optional LLM writer/evaluator, update Run Log, and sync artifacts to S3 (outputs/ only)."""
         if req.language.lower() != "python":
@@ -463,24 +491,23 @@ class CodeSandbox:
         # (6) LLM code writer (optional)
         if not req.code and not req.use_llm_writer:
             raise ValueError("No code provided and use_llm_writer is False")
+        
+        current_artifacts = self._artifact_index(run_dir, only_under=self.outputs_dirname)
 
         code_to_run = ""
-        writer_note = None  # ensure defined in both paths
 
         if req.code:
             code_to_run = _extract_python(req.code)
         elif req.use_llm_writer and code_llm and req.task:
             ns_keys = sorted([k for k in list(kernel.globals.keys()) if not k.startswith("__")])
-            input_files = list((run_dir / self.inputs_dirname).glob("*"))
-            output_files = list((run_dir / self.outputs_dirname).glob("*"))
-            current_files = list(run_dir.glob("*"))
-            preview = f"Namespace keys: {ns_keys[:50]}\nFiles in {self.inputs_dirname}/: {[f.name for f in input_files][:20]}\nFiles in {self.outputs_dirname}/: {[f.name for f in output_files][:20]}\nAll files in run dir: {[f.name for f in current_files][:20]}"
-            
-            run_log = self.run_log_path(thread_id).read_text(encoding="utf-8", errors="ignore") if self.run_log_path(thread_id).exists() else "New session."
+            preview = f"Namespace keys: {ns_keys[:50]}"
 
-            prompt = self._build_writer_prompt(req.task, preview, run_log)
+            execution_context = (execution_context or "").strip()
+            artifact_log = self.artifact_log_path(thread_id).read_text(encoding="utf-8", errors="ignore") if self.artifact_log_path(thread_id).exists() else ""
+            cel_log = self.cel_log_path(thread_id).read_text(encoding="utf-8", errors="ignore") if self.cel_log_path(thread_id).exists() else ""
+
+            prompt = self._build_writer_prompt(req.task, preview, execution_context, artifact_log, cel_log)
             code_to_run = _extract_python(code_llm.generate(prompt))
-            writer_note = "code generated by LLM"
             
         logger.info(f"exec_cell: thread_id={thread_id}, code to run:\n{code_to_run}\n--- end code ---\n\n")
 
@@ -505,22 +532,23 @@ class CodeSandbox:
         )
 
         # (3) Artifact scan — outputs/ only
-        artifacts = self._artifact_index(run_dir, only_under=self.outputs_dirname)
+        artifacts_after = self._artifact_index(run_dir, only_under=self.outputs_dirname)
 
         # (4) Summarize & append Run Log (Run Log is never passed to any LLM)
         summary = self._summarize_for_run_log(code_to_run, stdout, stderr)  # name retained; only used for text
+        
+        # only keep artifacts that were newly created in this cell
+        artifacts_after = [a for a in artifacts_after if a not in current_artifacts]
+        
         self._append_run_step(
             thread_id=thread_id,
             tool_name="sandbox.exec",
-            inputs_summary=self._inputs_summary(req, writer_note),
-            attempts_used=attempts_used,
-            final_code=code_to_run,
-            artifacts=artifacts,
+            task=req.task,
+            # attempts_used=attempts_used,
+            # final_code=code_to_run,
+            artifacts=artifacts_after,
             evaluation_line="PENDING",
         )
-
-        # Rescan outputs/ so any run-log-triggered files in outputs (rare) would be included
-        artifacts_after = self._artifact_index(run_dir, only_under=self.outputs_dirname)
 
         logger.info(f"exec_cell: thread_id={thread_id}, final code:\n{code_to_run}\n--- end code ---\n\n")
 
@@ -528,7 +556,8 @@ class CodeSandbox:
         verdict = None
         eval_text = ""
         output_summary = ""
-        code_filename = ""
+        code_artifact = {"name": "cell.py", "description": "The main code cell"}
+        artifacts_extra: List[Dict[str, Any]] = []
 
         if eval_llm and req.task:
             eval_prompt = self._build_eval_prompt(req.task, stdout, stderr, code_to_run, artifacts_after)
@@ -538,12 +567,13 @@ class CodeSandbox:
                 verdict = (obj.get("verdict") or "").strip()
                 eval_text = (obj.get("eval") or "").strip()
                 output_summary = (obj.get("output_summary") or "").strip()
-                code_filename = (obj.get("code_filename") or "").strip()
+                artifacts_extra = obj.get("artifacts") or []
+                code_artifact = (obj.get("code_artifact") or {})
             except Exception as e:
                 verdict = f"FAIL — evaluator JSON parse error: {e}"
                 eval_text = "Evaluator did not return valid JSON."
                 output_summary = (stdout or "")[:800]
-                code_filename = "cell.py"
+                code_artifact = {"name": "cell.py", "description": "The main code cell"}
                 
         self._update_last_eval_block(
             thread_id=thread_id,
@@ -564,12 +594,37 @@ class CodeSandbox:
             code_to_run = None
 
         code_obj = {
-            "filename": code_filename or "cell.py",
+            "name": code_artifact.get("name", "cell.py"),
+            "description": code_artifact.get("description", "The main code cell"),
             "text": code_to_run or "",
         }
-
+        
+        # Save the code to a file in run_dir for reference
+        code_file_path = run_dir / "codes" / code_obj["name"]
+        code_file_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            code_s3_path = self._s3_key_for(thread_id, f"codes/{code_obj['name']}")
+            code_file_path.write_text(code_obj["text"] or "", encoding="utf-8")
+            self.s3.put_file(
+                local_path=str(code_file_path),
+                key=code_s3_path,
+            )
+            code_obj["path"] = f"s3://{self.s3.bucket}/{code_s3_path}" if self.s3 else str(code_file_path)
+        except Exception as e:
+            logger.warning(f"Failed to write code file {code_file_path}: {e}")
+        
         # (6) Sync artifacts (outputs/ only) to S3 and reduce to minimal surface (name, path, size)
         files_out_minimal = self._sync_artifacts_to_s3(thread_id, artifacts_after)
+        
+        # Add the description for the artifacts if provided by the evaluator
+        if artifacts_extra:
+            extra_map = {a["name"]: a for a in artifacts_extra if "name" in a}
+            for f in files_out_minimal:
+                if f["name"] in extra_map and "description" in extra_map[f["name"]]:
+                    f["description"] = extra_map[f["name"]]["description"]
+        
+        # Convert files_out_minimal to File objects if needed
+        files_out_minimal = [File(**f) for f in files_out_minimal]
 
         return ExecResult(
             ok=ok,
@@ -580,6 +635,164 @@ class CodeSandbox:
             files_out=files_out_minimal,   # ONLY name, path (S3 or local), size
             summary=final_summary,
         )
+        
+        
+    def exec_cell_raw(
+        self,
+        thread_id: str,
+        req: ExecRequest,
+        code_llm: Optional[LLMClient] = None,
+        eval_llm: Optional[LLMClient] = None,
+    ) -> ExecResult:
+        """Execute a cell with optional LLM writer/evaluator and sync artifacts to S3 (outputs/ only).
+        NOTE: This version intentionally DOES NOT read or append any Run Log."""
+        if req.language.lower() != "python":
+            raise ValueError("Only Python is supported at the moment")
+        
+        logger.info(
+            "exec_cell(no-runlog): thread_id=%s, task=%s, code_len=%s, pip=%s, use_llm_writer=%s, repair_attempts=%s",
+            thread_id, req.task, (len(req.code) if req.code else 0), req.pip, req.use_llm_writer, req.repair_attempts
+        )
+
+        kernel = self.get_kernel(thread_id)
+        run_dir = self._run_dir(thread_id)
+        self._ensure_layout(thread_id)  # idempotent
+
+        # Ensure packages (if any)
+        pip_log = ""
+        if req.pip:
+            ok, pip_log = self.ensure_packages(req.pip)
+            if not ok:
+                pip_log = "[pip install failed]\n" + pip_log
+
+        # Require either raw code or an LLM writer
+        if not req.code and not req.use_llm_writer:
+            raise ValueError("No code provided and use_llm_writer is False")
+
+        # Snapshot current artifacts under outputs/
+        current_artifacts = self._artifact_index(run_dir, only_under=self.outputs_dirname)
+
+        # Determine code to run
+        if req.code:
+            code_to_run = _extract_python(req.code)
+        else:
+            # Minimal context (no Run Log, no Artifact Log)
+            ns_keys = sorted([k for k in list(kernel.globals.keys()) if not k.startswith("__")])
+            preview = f"Namespace keys: {ns_keys[:50]}"
+            # Lightweight writer prompt with just the task + brief context
+            prompt = (
+                "Write ONE Python cell to accomplish the task.\n"
+                "Do not validate file paths; assume referenced files exist if the task implies them.\n"
+                "Only stdout is captured. Use print(...) to show all outputs.\n"
+                "Output ONLY raw Python code (no markdown fences).\n\n"
+                f"Task:\n{req.task}\n\n"
+                f"Preview of namespace/files:\n{preview}\n"
+            )
+            code_to_run = _extract_python(code_llm.generate(prompt)) if code_llm else ""
+
+        logger.info("exec_cell(no-runlog): thread_id=%s, code to run:\n%s\n--- end code ---\n", thread_id, code_to_run)
+
+        # Execute
+        stdout, stderr, display = kernel.exec_code(code_to_run, timeout_s=req.timeout_s)
+        if pip_log:
+            stderr = pip_log + "\n" + (stderr or "")
+        logger.info("exec_cell(no-runlog): initial exec stdout:\n%s\n--- end stdout ---\n", stdout)
+
+        # Auto-repair (optional)
+        attempts_used = 0
+        code_to_run, stdout, stderr, display, attempts_used = self._maybe_repair_with_llm(
+            thread_id=thread_id,
+            req=req,
+            kernel=kernel,
+            code_llm=code_llm,
+            code=code_to_run,
+            stdout=stdout,
+            stderr=stderr,
+            display=display,
+        )
+
+        # Artifact scan — outputs/ only, keep only newly created
+        artifacts_after = self._artifact_index(run_dir, only_under=self.outputs_dirname)
+        artifacts_after = [a for a in artifacts_after if a not in current_artifacts]
+
+        # Build a lightweight summary (name retained but not used for any log)
+        summary = self._summarize_for_run_log(code_to_run, stdout, stderr)
+
+        logger.info("exec_cell(no-runlog): final code after repair:\n%s\n--- end code ---\n", code_to_run)
+
+        # Optional evaluation (no Run Log used or written)
+        verdict = None
+        eval_text = ""
+        output_summary = ""
+        code_artifact = {"name": "cell.py", "description": "The main code cell"}
+        artifacts_extra: List[Dict[str, Any]] = []
+
+        if eval_llm and req.task:
+            eval_prompt = self._build_eval_prompt(req.task, stdout, stderr, code_to_run, artifacts_after)
+            raw = eval_llm.generate(eval_prompt).strip()
+            try:
+                obj = self._extract_json_blob(raw)
+                verdict = (obj.get("verdict") or "").strip()
+                eval_text = (obj.get("eval") or "").strip()
+                output_summary = (obj.get("output_summary") or "").strip()
+                artifacts_extra = obj.get("artifacts") or []
+                code_artifact = (obj.get("code_artifact") or {}) or code_artifact
+            except Exception as e:
+                verdict = f"FAIL — evaluator JSON parse error: {e}"
+                eval_text = "Evaluator did not return valid JSON."
+                output_summary = (stdout or "")[:800]
+                # keep default code_artifact
+
+        # Determine ok status (no log writes)
+        if verdict and isinstance(verdict, str) and verdict.upper().startswith("FAIL"):
+            ok = False
+        else:
+            ok = ("Traceback (most recent call last)" not in (stderr or "")) and ("[Sandbox] Timeout" not in (stderr or ""))
+
+        final_summary = output_summary or summary
+
+        # Hide executed code when error
+        code_text_to_save = code_to_run if ok else ""
+
+        code_obj = {
+            "name": code_artifact.get("name", "cell.py"),
+            "description": code_artifact.get("description", "The main code cell"),
+            "text": code_text_to_save or "",
+        }
+
+        # Save executed code file (for provenance), then upload to S3
+        code_file_path = run_dir / "codes" / code_obj["name"]
+        code_file_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            code_s3_path = self._s3_key_for(thread_id, f"codes/{code_obj['name']}")
+            code_file_path.write_text(code_obj["text"], encoding="utf-8")
+            self.s3.put_file(local_path=str(code_file_path), key=code_s3_path)
+            code_obj["path"] = f"s3://{self.s3.bucket}/{code_s3_path}" if self.s3 else str(code_file_path)
+        except Exception as e:
+            logger.warning("Failed to write code file %s: %s", code_file_path, e)
+
+        # Sync artifacts (outputs/ only) to S3 and reduce to minimal surface (name, path, size)
+        files_out_minimal = self._sync_artifacts_to_s3(thread_id, artifacts_after)
+
+        # Merge optional evaluator-provided descriptions
+        if artifacts_extra:
+            extra_map = {a["name"]: a for a in artifacts_extra if "name" in a}
+            for f in files_out_minimal:
+                if f["name"] in extra_map and "description" in extra_map[f["name"]]:
+                    f["description"] = extra_map[f["name"]]["description"]
+
+        files_out_minimal = [File(**f) for f in files_out_minimal]
+
+        return ExecResult(
+            ok=ok,
+            code=code_obj,
+            stdout=stdout,
+            stderr=stderr,
+            display=display,
+            files_out=files_out_minimal,
+            summary=final_summary,
+        )
+
 
     # ---------- Helpers ----------
     def _inputs_summary(self, req: ExecRequest, writer_note: Optional[str]) -> str:

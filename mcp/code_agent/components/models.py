@@ -5,9 +5,10 @@ DEFAULT_TTL = 1800  # seconds
 
 # ----------------- Models (IO schemas) -----------------
 
-class FileIn(BaseModel):
+class File(BaseModel):
     name: str
     path: str = Field(..., description="Full path of the file e.g s3://bucket/key")
+    description: Optional[str] = None
     size: Optional[int] = None
 
 
@@ -17,9 +18,9 @@ class CodeExecInput(BaseModel):
     task: str = Field(..., description="Natural language description of the task to accomplish with the code")
     timeout_s: Optional[int] = 30
     # pip: Optional[List[str]] = None
-    files_in: Optional[List[FileIn]] = Field(default_factory=list, description="List of input files to be downloaded before execution")
-    max_steps: int = 7
-    repair_attempts: int = 2
+    files_in: Optional[List[File]] = Field(default_factory=list, description="List of input files to be downloaded before execution")
+    max_steps: Optional[int] = 7
+    repair_attempts: Optional[int] = 2
 
 class CreateSessionIn(BaseModel):
     run_id: Optional[str] = None

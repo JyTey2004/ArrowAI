@@ -59,6 +59,8 @@ export class AIWebSocketService {
         return new Promise((resolve, reject) => {
             try {
                 const wsUrl = `${this.baseUrl}/ws/mcp_graph?thread_id=${chatId}`;
+                // const wsUrl = `${this.baseUrl}/ws/assist?run_id=${chatId}`;
+
                 this.ws = new WebSocket(wsUrl);
 
                 this.ws.onopen = () => {

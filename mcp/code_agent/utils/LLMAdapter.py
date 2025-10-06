@@ -1,7 +1,6 @@
 from typing import Any, Dict, Iterable, List, Optional, Union
 from components.executor import LLMClient
 from services.openai_client import OpenAIClient
-
 class LLMAdapter(LLMClient):
     """
     Bridges the sandbox's LLMClient interface to your OpenAIClient.generate().
@@ -32,5 +31,22 @@ class LLMAdapter(LLMClient):
             image_urls=image_urls,
             temperature=self.temperature, 
             max_output_tokens=max_output_tokens,
+        )
+        return self.oai.output_text(resp) or ""
+    
+    def response(
+        self, 
+        prompt
+    ) -> str:
+        resp = self.oai.response(
+            model=self.model,
+            input=[
+                 {
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": self.system}],
+                 },
+                 *prompt
+            ],
+            temperature=self.temperature, 
         )
         return self.oai.output_text(resp) or ""

@@ -1,0 +1,19 @@
+[project]
+name = "research-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "boto3>=1.40.44",
+    "fastapi==0.118.0",
+    "httpx==0.28.1",
+    "mcp[cli]==1.15.0",
+    "openai>=2.1.0",
+    "orjson==3.10.7",
+    "perplexityai==0.13.0",
+    "pillow>=11.3.0",
+    "pydantic==2.11.2",
+    "python-dotenv==1.0.1",
+    "uvicorn[standard]==0.37.0",
+]

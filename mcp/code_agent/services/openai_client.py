@@ -1,10 +1,13 @@
 import os, base64, mimetypes, pathlib, io
 from typing import Any, Iterable, List, Optional, Union, Dict
 
+import PIL
+
 from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
+
 
 # ---------- Helpers ----------
 def _is_http_url(s: str) -> bool:
@@ -175,6 +178,9 @@ class OpenAIClient:
             kwargs["metadata"] = metadata
 
         return self.client.responses.create(stream=True, **kwargs) if stream else self.client.responses.create(**kwargs)
+
+    def response(self, **kwargs) -> Any:
+        return self.client.responses.create(**kwargs)
 
     # Convenience: get plain text (handles Responses API shape)
     @staticmethod
