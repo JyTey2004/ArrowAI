@@ -393,6 +393,7 @@ export const ChatInterface: React.FC = () => {
     chats,
     messages,
     isLoading,
+    awaitingTodoFeedback,
     activeArtifact,
     setActiveArtifact,
     artifacts,
@@ -417,10 +418,27 @@ export const ChatInterface: React.FC = () => {
   const [pendingClarification, setPendingClarification] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const latestArtifactCount = useRef<number>(artifacts.length);
 
   const activeChatData = chats.find(chat => chat.id === activeChat);
   const hasArtifact = activeArtifact !== null;
   const currentArtifact = artifacts.find(a => a.id === activeArtifact);
+
+  useEffect(() => {
+    if (artifacts.length === 0) {
+      latestArtifactCount.current = 0;
+      return;
+    }
+
+    if (artifacts.length !== latestArtifactCount.current) {
+      const latestId = artifacts[artifacts.length - 1].id;
+      if (latestId !== activeArtifact) {
+        setActiveArtifact(latestId);
+      }
+    }
+
+    latestArtifactCount.current = artifacts.length;
+  }, [artifacts, activeArtifact, setActiveArtifact]);
 
   // Add clarification message to chat when clarificationQuestion changes
   useEffect(() => {
@@ -477,6 +495,7 @@ export const ChatInterface: React.FC = () => {
           message.text.includes('❌ **Error:**') ||
           message.text.includes('💻 **Code Generated:**') ||
           message.text.includes('📋 **Todo List Generated:**') ||
+          message.text.includes('🚧 **Step') ||
           message.text.includes('📎 **Artifact');
 
         const isClarificationMessage = message.text.includes('**Clarification needed:**');
@@ -570,7 +589,14 @@ export const ChatInterface: React.FC = () => {
   };
 
   const handleSendMessage = async () => {
+    setSendError(null);
+
     if ((!inputValue.trim() && selectedFiles.length === 0) || isLoading || !isConnected) return;
+
+    if (awaitingTodoFeedback && selectedFiles.length > 0) {
+      setSendError('File uploads are disabled while reviewing the TODO list.');
+      return;
+    }
 
     const userMessageText = inputValue.trim() || 'File upload';
     const filesToSend = [...selectedFiles];
@@ -578,8 +604,6 @@ export const ChatInterface: React.FC = () => {
     setInputValue('');
     setSelectedFiles([]);
     setShowFileUpload(false);
-    setSendError(null);
-
     if (inputRef.current) {
       inputRef.current.style.height = 'auto';
     }
@@ -627,7 +651,10 @@ export const ChatInterface: React.FC = () => {
     setShowFileUpload(!showFileUpload);
   };
 
-  const canSend = (inputValue.trim().length > 0 || selectedFiles.length > 0) && !isLoading && isConnected;
+  const canSend = (inputValue.trim().length > 0 || selectedFiles.length > 0)
+    && !isLoading
+    && isConnected
+    && (!awaitingTodoFeedback || selectedFiles.length === 0);
 
   const getConnectionStatusText = () => {
     switch (connectionStatus) {
@@ -641,6 +668,7 @@ export const ChatInterface: React.FC = () => {
   const getInputPlaceholder = () => {
     if (!isConnected) return 'Connecting to AI service...';
     if (clarificationQuestion) return 'Please provide clarification...';
+    if (awaitingTodoFeedback) return 'Type /approve to accept, or paste an updated TODO list to request changes...';
     if (isLoading) return 'AI is thinking...';
     if (selectedFiles.length > 0) return 'Add a message about these files (optional)...';
     return 'Type your message here... (Shift+Enter for new line)';
@@ -695,6 +723,12 @@ export const ChatInterface: React.FC = () => {
             {currentNode && (
               <CurrentNode>
                 Processing: {currentNode} {executionStep > 0 && `(Step ${executionStep})`}
+              </CurrentNode>
+            )}
+
+            {awaitingTodoFeedback && (
+              <CurrentNode>
+                Awaiting TODO feedback
               </CurrentNode>
             )}
           </StatusBar>
@@ -805,7 +839,7 @@ export const ChatInterface: React.FC = () => {
           <FileUploadSection $isVisible={showFileUpload}>
             <FileUpload
               onFilesSelected={setSelectedFiles}
-              disabled={isLoading || !isConnected}
+              disabled={isLoading || !isConnected || awaitingTodoFeedback}
               maxFiles={5}
             />
           </FileUploadSection>
@@ -827,7 +861,7 @@ export const ChatInterface: React.FC = () => {
                 onClick={toggleFileUpload}
                 $hasFiles={selectedFiles.length > 0 || showFileUpload}
                 title="Upload files"
-                disabled={isLoading || !isConnected}
+                disabled={isLoading || !isConnected || awaitingTodoFeedback}
               >
                 {showFileUpload ? <X size={18} /> : <Paperclip size={18} />}
                 {selectedFiles.length > 0 && (

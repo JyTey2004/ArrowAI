@@ -244,19 +244,22 @@ class ArtifactsAnalyzer:
                             f"### **{a.name}:** \n{result}\n\n"
                         )
                 elif file_type in {"csv", "tsv", "xlsx"}:
-                    # artifact path, check inputs dir and outputs dir for the file
                     artifact_local_path = None
                     short_file_path = ""
                     inputs_dir = self._artifacts_dir(thread_id) / self.inputs_dirname
                     outputs_dir = self._artifacts_dir(thread_id) / self.outputs_dirname
-                    if (inputs_dir / a.name).exists():
-                        artifact_local_path = inputs_dir / a.name
-                        short_file_path = str(self.inputs_dirname + "/" + a.name)
-                    elif (outputs_dir / a.name).exists():
-                        artifact_local_path = outputs_dir / a.name
-                        short_file_path = str(self.outputs_dirname + "/" + a.name)
+
+                    inp = (inputs_dir / a.name)
+                    out = (outputs_dir / a.name)
+
+                    if inp.is_file():
+                        artifact_local_path = inp
+                        short_file_path = f"{self.inputs_dirname}/{a.name}"
+                    elif out.is_file():
+                        artifact_local_path = out
+                        short_file_path = f"{self.outputs_dirname}/{a.name}"
                     else:
-                        logger.warning(f"Artifact {a.name} not found in inputs or outputs.")
+                        logger.warning("Artifact %s not found in %s or %s.", a.name, inputs_dir, outputs_dir)
                         continue
 
                     req = ExecRequest(
@@ -265,8 +268,8 @@ class ArtifactsAnalyzer:
                         files_in=[{"name": a.name, "path": str(artifact_local_path)}],
                         timeout_s=60,
                         task=(
-                            f"Read and summarize the input file {a.name} to understand its schema and content. "
-                            f"Artifact file path: {short_file_path}. "
+                            f"Read and summarize the {a.name} to understand its schema and content."
+                            f"Artifact file path: {short_file_path}."
                             "You should show the all data types, column names and first few rows. So that a model later can use this information to write a summary for this file. "
                         ),
                         use_llm_writer=True,

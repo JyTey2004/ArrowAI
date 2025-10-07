@@ -73,42 +73,31 @@ ARTIFACT_SYSTEM = (
 )
 
 ANALYZE_SYSTEM = (
-  "You are a senior research planner.\n"
-  "Input: RESEARCH_LOG (user goal plus any per-artifact findings).\n"
-  "Task: Produce a SEARCH PLAN in strict JSON to guide evidence gathering.\n"
-  "\n"
-  "CONSTRAINTS:\n"
-  "- Max 5 non-overlapping sub_topics; include only what is relevant to the RESEARCH_LOG.\n"
-  "- You should start with searches to gather initial information, then follow up with analyses to deepen understanding.\n"
-  "- Sub topics must be in a logical order (e.g., foundational concepts before advanced topics, chronological order if applicable).\n"
-  "- Search will be to find external information (e.g., recent developments, statistics, case studies).\n"
-  "- Analysis will be reading/understanding/summarizing artifacts/search results. You have no tools other than a browser.\n"
-  "- Each sub_topic has 1-5 questions on ask questions that are specific and relevant to the sub_topic.\n"
-  "- Questions must be specific, executable, and phrased so they can be used directly as search queries or analysis tasks.\n"
-  "- Keep strings concise and single-line (no line breaks inside values).\n"
-  "- Prefer measurable, verifiable language (e.g., baseline, variability, trend change, seasonality/cycles if applicable, outliers, data completeness, external context) over vague terms like 'typical' or 'general overview'.\n"
-  "- Prioritize internal validation (definitions, baselines) before external benchmarking or context.\n"
-  "- Questions must be phrased to yield factual, evidence-backed answers.\n"
-  "- Deduplicate: no overlapping titles or repeated questions.\n"
-  "\n"
-  "OUTPUT FORMAT (return ONLY this JSON object—no markdown, fences, or commentary):\n"
-  "{\n"
-  "  \"sub_topics\": [\n"
-  "    {\n"
-  "      \"title\": \"string (short, specific)\",\n"
-  "      \"action\": \"string (one of: 'search', 'analysis')\",\n"
-  "      \"rationale\": \"string (1–2 lines referencing findings/gaps in RESEARCH_LOG)\",\n"
-  "      \"questions\": [string, ...],  # list of 1–5 specific questions to answer\n"
-  "      \"country\": \"string (optional, ISO country code to tailor search results)\"\n"
-  "    }\n"
-  "\n"
+    "You are a senior research planner.\n"
+    "Input: USER_GOAL, RESEARCH_LOG (Previous Research) and ARTIFACTS_LOG (File Insights).\n"
+    "Task: Propose the next three research questions that will unlock the goal.\n"
+    "\n"
+    "Constraints:\n"
+    "- Output must be strict JSON with keys: 'rationale' (string) and 'questions' (array of exactly 3 strings).\n"
+    "- Questions must be specific, answerable with web research, and mutually complementary (no duplicates).\n"
+    "- Each question should reflect evidence gaps surfaced in RESEARCH_LOG and move the investigation forward.\n"
+    "- Keep values single-line (no embedded newlines).\n"
+    "- If context is insufficient, still propose well-structured exploratory questions.\n"
+    "\n"
+    "Example output (do NOT include comments):\n"
+    "{\"rationale\": \"Why these questions matter...\", \"questions\": [\"Question 1\", \"Question 2\", \"Question 3\"]}"
 )
 
 ANALYSIS_SYSTEM = (
-    "You are a senior researcher, analyze the following file in detail to extract all relevant information.\n"
-    "- RESEARCH_LOG.md contains user queries and artifacts."
-    "- SEARCH_LOG.md contains search results."
-    "Answer the list of questions below based on the information in RESEARCH_LOG.md and SEARCH_LOG.md."
+    "You are the research synthesizer for an iterative investigation.\n"
+    "Input provides USER_GOAL, the cumulative SEARCH_LOG, and prior ANALYSIS summaries and ARTIFACTS_LOG.\n"
+    "Task: produce a refreshed synthesis for the current loop, decide whether the goal is answered, and surface up to three next questions.\n"
+    "\n"
+    "Output must be STRICT JSON with keys: \n"
+    "- summary: markdown bullet points and short paragraphs capturing findings from ALL iterations so far, highlighting what is new this round. Include links to search results where applicable. TThis should never be empty.\n"
+    "- next_questions: array of up to three forward-looking questions (omit or empty array if goal is satisfied).\n"
+    "- task_answered: boolean indicating if the user's goal is sufficiently answered.\n"
+    "Do not include commentary outside the JSON. Do not include code fencing.\n"
 )
 
 SUMMARY_SYSTEM = (
@@ -156,10 +145,12 @@ summary_llm = LLMAdapter(
 @mcp.tool(
     name="analyze_and_research",
     description=(
-        "Stateful research agent that takes a task and iteratively researches and refines a plan to achieve it. "
+        "Stateful research agent that takes a task and iteratively researches and refines a plan to achieve it."
         "Do not pass in big unprocessed artifacts, this tool cannot handle data processing."
         "Instead, pass in artifacts like reports/summaries/logs that have been pre-processed. "
-        "Uses artifacts stored on S3 as needed; returns a research_report.md with sources."
+        "Uses artifacts stored on S3 as needed;"
+        "Returns key findings, gaps, and any new artifacts generated."
+        "A research report will be in the artifacts."
     ),
 )
 async def analyze_and_research(
@@ -189,10 +180,25 @@ async def analyze_and_research(
         analyzer._append_research_log(input.thread_id, header)
 
         # ------ Analyze the Artifacts ------
-        analysis_results = await analyzer.analyze(input.thread_id, task, input.files_in, artifact_llm, analyze_llm)
+        initial_plan = await analyzer.analyze(input.thread_id, task, input.files_in, artifact_llm, analyze_llm)
+
+        # Log derived questions for observability
+        log.info(
+            "Initial research questions for thread %s: %s",
+            input.thread_id,
+            "; ".join(initial_plan.questions),
+        )
 
         # ------ Research ------
-        report_summary = await researcher.research(input.thread_id, task, analysis_results, perplexity, analysis_llm, summary_llm, upload_to_s3=True)
+        report_summary = await researcher.research(
+            input.thread_id,
+            task,
+            initial_plan,
+            perplexity,
+            analysis_llm,
+            summary_llm,
+            upload_to_s3=True,
+        )
         
         return {
             "Key Findings": report_summary.key_findings,

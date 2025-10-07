@@ -50,8 +50,10 @@ export interface FileUploadProgress {
 export interface WebSocketEventHandlers {
     onNode?: (name: string, step?: number) => void;
     onClarify?: (question: string) => void;
-    onTodos?: (markdown: string) => void;
+    onTodos?: (markdown: string, requiresFeedback?: boolean, source?: string) => void;
     onCode?: (text: string, filename?: string) => void;
+    onThought?: (thought: string) => void;
+    onStatus?: (payload: Record<string, unknown>) => void;
     onStdout?: (text: string) => void;
     onStderr?: (text: string) => void;
     onArtifacts?: (items: any[]) => void;
@@ -62,4 +64,5 @@ export interface WebSocketEventHandlers {
     onFileUploadProgress?: (progress: number, fileName: string) => void;
     onFileUploadComplete?: (fileName: string) => void;
     onFileUploadError?: (error: string, fileName: string) => void;
+    onTodoStatus?: (status: string) => void;
 }

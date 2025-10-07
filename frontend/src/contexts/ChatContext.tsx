@@ -2,7 +2,7 @@
 import React, { createContext, useContext, useState, useRef, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import type { Chat, Message, Artifact } from '../types/chat';
-import { AIWebSocketService, type FileUpload } from '../services/websocketService';
+import { AIWebSocketService, type FileUpload, type TodoFeedbackPayload } from '../services/websocketService';
 import { v4 as uuidv4 } from 'uuid';
 
 interface FileUploadState {
@@ -35,6 +35,8 @@ interface ChatContextType {
   clarificationQuestion: string | null;
   sendClarification: (text: string) => void;
   todos: string | null;
+  awaitingTodoFeedback: boolean;
+  submitTodoFeedback: (feedback: TodoFeedbackPayload) => Promise<void>;
   executionStep: number;
   fileUploads: FileUploadState[];
   clearCompletedUploads: () => void;
@@ -69,6 +71,7 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
   const [currentNode, setCurrentNode] = useState<string | null>(null);
   const [clarificationQuestion, setClarificationQuestion] = useState<string | null>(null);
   const [todos, setTodos] = useState<string | null>(null);
+  const [awaitingTodoFeedback, setAwaitingTodoFeedback] = useState(false);
   const [executionStep, setExecutionStep] = useState(0);
   const [fileUploads, setFileUploads] = useState<FileUploadState[]>([]);
 
@@ -89,6 +92,7 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
         console.log('Disconnected from AI WebSocket');
         setIsConnected(false);
         setConnectionStatus('disconnected');
+        setAwaitingTodoFeedback(false);
       },
 
       onNode: (name, step) => {
@@ -103,15 +107,38 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
         setIsLoading(false);
       },
 
-      onTodos: (markdown) => {
+      onTodos: (markdown, requiresFeedback = false, source) => {
         setTodos(markdown);
-        addMessage({
-          text: `📋 **Todo List Generated:**\n\n${markdown}`,
-          isUser: false,
-          hasArtifact: true,
-          artifactType: 'document',
-          artifactContent: markdown,
-        });
+        if (requiresFeedback) {
+          setAwaitingTodoFeedback(true);
+          setIsLoading(false);
+        } else {
+          setAwaitingTodoFeedback(false);
+        }
+
+        if (requiresFeedback) {
+          const intro = source === 'user'
+            ? '📋 **Todo List Updated:**'
+            : '📋 **Todo List Generated:**';
+          addMessage({
+            text: `${intro}\n\n${markdown}`,
+            isUser: false,
+            hasArtifact: true,
+            artifactType: 'document',
+            artifactContent: markdown,
+          });
+          addMessage({
+            text: '✋ **Review the TODO list.**\nType `/approve` to accept as-is, or send a revised markdown list in the chat to request changes.',
+            isUser: false,
+          });
+        } else {
+          addMessage({
+            text: source === 'approved'
+              ? '✅ **Todo plan approved. Continuing execution.**'
+              : '📋 **Todo list updated.**',
+            isUser: false,
+          });
+        }
       },
 
       onCode: (text, filename) => {
@@ -123,6 +150,42 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
           artifactContent: text,
           artifactLanguage: detectLanguageFromFilename(filename) || 'python',
           artifactFilename: filename,
+        });
+      },
+
+      onThought: (rawThought) => {
+        let displayText = rawThought;
+        try {
+          const parsed = JSON.parse(rawThought);
+          const tool = parsed.tool ? `**Tool:** ${parsed.tool}` : '';
+          const args = parsed.args ? `\n\`\`\`json\n${JSON.stringify(parsed.args, null, 2)}\n\`\`\`` : '';
+          displayText = `🤔 **Thought:** Preparing to call MCP.\n${tool}${args}`;
+        } catch {
+          displayText = `🤔 **Thought:** ${rawThought}`;
+        }
+        addMessage({
+          text: displayText,
+          isUser: false,
+        });
+      },
+
+      onStatus: (payload) => {
+        const stepNumber = typeof payload.step === 'number' ? payload.step : (payload.step ?? '?');
+        const statusText = typeof payload.status === 'string' ? payload.status.toUpperCase() : 'IN PROGRESS';
+        const plan = typeof payload.plan === 'string' ? payload.plan : '';
+        const summary = typeof payload.summary === 'string' ? payload.summary : '';
+
+        let text = `🚧 **Step ${stepNumber}: ${statusText}**`;
+        if (plan) {
+          text += `\n${plan}`;
+        }
+        if (summary) {
+          text += `\n\n${summary}`;
+        }
+
+        addMessage({
+          text,
+          isUser: false,
         });
       },
 
@@ -170,6 +233,7 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
         });
         setIsLoading(false);
         setCurrentNode(null);
+        setAwaitingTodoFeedback(false);
       },
 
       onError: (detail) => {
@@ -180,6 +244,7 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
         });
         setIsLoading(false);
         setCurrentNode(null);
+        setAwaitingTodoFeedback(false);
       },
 
       onFileUploadProgress: (progress, fileName) => {
@@ -204,6 +269,12 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
             ? { ...upload, status: 'error' as const, error }
             : upload
         ));
+      },
+
+      onTodoStatus: (status) => {
+        if (status === 'approved') {
+          setAwaitingTodoFeedback(false);
+        }
       }
     });
 
@@ -250,6 +321,7 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
     setMessages([]);
     setClarificationQuestion(null);
     setTodos(null);
+    setAwaitingTodoFeedback(false);
     setCurrentNode(null);
     setExecutionStep(0);
     setCurrentView('home');
@@ -295,6 +367,55 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
   const sendMessage = async (text: string, files: File[] = []) => {
     if (!wsService.current || !wsService.current.isConnected()) {
       throw new Error('Not connected to AI service');
+    }
+
+    const trimmedInput = (text || '').trim();
+
+    if (awaitingTodoFeedback) {
+      if (!trimmedInput) {
+        throw new Error('Provide feedback for the TODO list before continuing.');
+      }
+      if (files.length > 0) {
+        throw new Error('File uploads are not allowed while reviewing the TODO list.');
+      }
+
+      const approveCommand = '/approve';
+      const isApprove = trimmedInput.toLowerCase().startsWith(approveCommand);
+      const comment = isApprove ? trimmedInput.slice(approveCommand.length).trim() : undefined;
+
+      if (isApprove && (!todos || todos.trim().length === 0)) {
+        throw new Error('There is no TODO list to approve.');
+      }
+
+      const updateMarkdown = isApprove ? todos ?? '' : text;
+      if (!isApprove && trimmedInput.length === 0) {
+        throw new Error('Provide updated TODO markdown before requesting changes.');
+      }
+
+      addMessage({
+        text,
+        isUser: true,
+      });
+
+      setClarificationQuestion(null);
+      setIsLoading(true);
+
+      try {
+        await submitTodoFeedback({
+          decision: isApprove ? 'approve' : 'update',
+          markdown: updateMarkdown,
+          comment,
+        });
+      } catch (error) {
+        console.error('Failed to send TODO feedback:', error);
+        setIsLoading(false);
+        addMessage({
+          text: `⚠️ Failed to send TODO feedback: ${error instanceof Error ? error.message : error}`,
+          isUser: false,
+        });
+        throw error;
+      }
+      return;
     }
 
     if (files.length > 0) {
@@ -369,6 +490,43 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
     }
   };
 
+  const submitTodoFeedback = async ({ decision, markdown, comment }: TodoFeedbackPayload) => {
+    if (!wsService.current || !wsService.current.isConnected()) {
+      throw new Error('Not connected to AI service');
+    }
+
+    const trimmedMarkdown = markdown?.trim();
+    const trimmedComment = comment?.trim();
+
+    if (decision === 'update') {
+      if (!trimmedMarkdown) {
+        throw new Error('Provide updated TODO markdown before requesting changes.');
+      }
+      setTodos(trimmedMarkdown);
+    } else {
+      setAwaitingTodoFeedback(false);
+    }
+
+    setIsLoading(true);
+
+    try {
+      wsService.current.sendTodoFeedback({
+        decision,
+        markdown: trimmedMarkdown,
+        comment: trimmedComment,
+      });
+    } catch (error) {
+      if (decision === 'approve') {
+        setAwaitingTodoFeedback(true);
+        setIsLoading(false);
+      } else {
+        setIsLoading(false);
+      }
+      console.error('Failed to send TODO feedback:', error);
+      throw error instanceof Error ? error : new Error('Failed to send TODO feedback');
+    }
+  };
+
   const clearCompletedUploads = () => {
     setFileUploads(prev => prev.filter(upload => upload.status !== 'completed'));
   };
@@ -382,6 +540,7 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
       setMessages([]);
       setClarificationQuestion(null);
       setTodos(null);
+      setAwaitingTodoFeedback(false);
       setCurrentNode(null);
       setExecutionStep(0);
     }
@@ -425,6 +584,8 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
         clarificationQuestion,
         sendClarification,
         todos,
+        awaitingTodoFeedback,
+        submitTodoFeedback,
         executionStep,
         fileUploads,
         clearCompletedUploads,

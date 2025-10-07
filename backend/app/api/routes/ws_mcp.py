@@ -42,7 +42,8 @@ s3c = S3Client(
 s3c.ensure_bucket(create_if_missing=True)
 
 model = init_chat_model(
-    model="openai:gpt-4.1-mini",
+    model_provider=os.environ.get("MCP_LLM_PROVIDER", "openai"),
+    model=os.environ.get("MCP_LLM_MODEL", "openai:gpt-4.1-mini"),
     temperature=0,
 )
 
@@ -100,6 +101,72 @@ def _append_cel(base_prefix: str, content: str) -> None:
     prev = _read_cel(base_prefix)
     new = prev + f"\n{content.strip()}\n"
     s3c.put_bytes(key=_cel_key(base_prefix), data=new.encode("utf-8"), content_type="text/markdown")
+
+TEXT_PREVIEW_EXTS = {".txt", ".md", ".csv", ".tsv", ".json", ".log", ".py", ".ipynb", ".html", ".yaml", ".yml"}
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp"}
+
+def _prepare_artifact_preview(artifact: dict) -> dict:
+    art = dict(artifact)
+    uri = art.get("uri") or art.get("path") or ""
+    name = art.get("name") or (uri.split("/")[-1] if uri else None)
+    if name:
+        art["name"] = name
+    ext = os.path.splitext(name or "")[1].lower()
+
+    if uri.startswith("s3://"):
+        try:
+            art["download_url"] = s3c.presigned_get(uri, expires_in=3600)
+        except Exception as e:
+            logger.warning(f"Failed to generate presigned URL for {uri}: {e}")
+
+        if ext in TEXT_PREVIEW_EXTS:
+            size = art.get("size") or 0
+            if not size or size <= 200_000:
+                try:
+                    data, _ = s3c.get_bytes(uri)
+                    preview = data.decode("utf-8", errors="replace")
+                    if len(preview) > 8000:
+                        preview = preview[:8000] + "\n... truncated ..."
+                    art["content"] = preview
+                    art["preview_type"] = "text"
+                    art.setdefault("type", "document")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch text preview for {uri}: {e}")
+        elif ext in IMAGE_EXTS:
+            art["preview_type"] = "image"
+            art.setdefault("type", "image")
+
+    return art
+
+def _parse_tool_payload(message: ToolMessage) -> Optional[dict]:
+    content = message.content
+    if isinstance(content, dict):
+        if "json" in content and isinstance(content["json"], (dict, list)):
+            return content["json"]
+        return content
+    if isinstance(content, list):
+        text_chunks = []
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "json" and isinstance(part.get("json"), (dict, list)):
+                    return part["json"]
+                if part.get("type") == "text" and isinstance(part.get("text"), str):
+                    text_chunks.append(part["text"])
+            elif isinstance(part, str):
+                text_chunks.append(part)
+        if text_chunks:
+            candidate = _extract_json("\n".join(text_chunks)) or "\n".join(text_chunks)
+            try:
+                return json.loads(candidate)
+            except Exception:
+                return None
+    if isinstance(content, str):
+        candidate = _extract_json(content)
+        try:
+            return json.loads(candidate)
+        except Exception:
+            return None
+    return None
 
 def     _extract_json(s: str) -> str:
     """Return the first JSON object found (handles fenced code blocks)."""
@@ -228,6 +295,8 @@ class MCPState(dict):
     max_steps: int
     done: bool
     todo: Optional[str]
+    awaiting_todo_feedback: bool
+    resume_from: Optional[str]
     need_clarification: bool
     clarifying_question: Optional[str]
     artifacts: List[dict]
@@ -256,6 +325,14 @@ async def clarify_node(state: MCPState, config: RunnableConfig):
         base_prefix = exec_ctx["base_prefix"]
         
         emit({"event": "node", "name": "clarify"})
+
+        if state.get("resume_from") == "execute":
+            logger.info(f"Clarify node for thread_id={thread_id} skipping clarification to resume execution.")
+            state["resume_from"] = None
+            return {
+                "need_clarification": False,
+                "clarifying_question": None,
+            }
         
         if state.get("need_clarification") == False:
             # This is the first user message
@@ -315,7 +392,7 @@ async def todo_node(state: MCPState, config: RunnableConfig):
         thread_id = config["configurable"]["thread_id"]
         exec_ctx = config["configurable"]["exec_ctx"]
         base_prefix = exec_ctx["base_prefix"]
-        emit({"event": "node", "name": "write_todos"})
+        await emit({"event": "node", "name": "write_todos"})
         
         cel_snip = _read_cel(base_prefix)
         
@@ -330,12 +407,16 @@ async def todo_node(state: MCPState, config: RunnableConfig):
         todo_md = resp.content or "- [ ] Step 1\n- [ ] Step 2"
         
         logger.info(f"Todo node for thread_id={thread_id} produced todo:\n{todo_md}\n--- end todo ---\n\n")
+        await emit({"event": "todos", "markdown": todo_md, "requires_feedback": True})
         
         todo_message = f"""## Task Breakdown:
 {todo_md}
         """
 
-        _append_cel(base_prefix, todo_message)
+        # Only log when user accepts the todo
+        if state.get("awaiting_todo_feedback"):
+            state["resume_from"] = "execute"
+            _append_cel(base_prefix, todo_message)
 
         return {
             "todo": todo_md,
@@ -344,12 +425,31 @@ async def todo_node(state: MCPState, config: RunnableConfig):
         logger.exception(f"Todo node error: {e}")
         raise
 
+
+async def await_todo_feedback_node(state: MCPState, config: RunnableConfig):
+    try:
+        emit = config["configurable"]["emit"]
+        thread_id = config["configurable"]["thread_id"]
+
+        await emit({"event": "node", "name": "await_todo_feedback"})
+        logger.info(f"Awaiting TODO feedback for thread_id={thread_id}.")
+
+        return {
+            "awaiting_todo_feedback": True,
+        }
+    except Exception as e:
+        logger.exception(f"Await TODO feedback node error: {e}")
+        raise
+
 async def execute_node(state: MCPState, config: RunnableConfig):
     try:
         emit = config["configurable"]["emit"]
         thread_id = config["configurable"]["thread_id"]
         exec_ctx = config["configurable"]["exec_ctx"]
         base_prefix = exec_ctx["base_prefix"]
+
+        state["awaiting_todo_feedback"] = False
+        state["resume_from"] = None
         
         emit({"event": "node", "name": "execute", "step": state.get("step_idx", 0)})
         
@@ -362,6 +462,9 @@ async def execute_node(state: MCPState, config: RunnableConfig):
         tool_messages = [m for m in all_messages if isinstance(m, ToolMessage)]
         
         tool_content = []
+        new_artifacts = []
+
+        prev_tool_count = len(tool_messages)
 
         # If last message is a ToolMessage, we pop it and summarize its results first
         if tool_messages:
@@ -422,12 +525,15 @@ async def execute_node(state: MCPState, config: RunnableConfig):
             # Remove verbose ToolMessages before adding the assistant summary
             all_messages = [m for m in all_messages if not isinstance(m, ToolMessage)]
             all_messages.append(AIMessage(content=summary_obj.summary))
-
-            # Optionally expose artifacts to the graph state for later nodes/UI
+            existing_uris = {a.get("uri") for a in state.get("artifacts", []) if a.get("uri")}
             for summary_art in summary_obj.artifacts:
-                if summary_art.uri and summary_art.uri not in [a.get("uri") for a in state.get("artifacts", [])]:
-                    state["artifacts"].append(summary_art.dict())
-
+                if summary_art.uri and summary_art.uri not in existing_uris:
+                    art_dict = _prepare_artifact_preview(summary_art.dict())
+                    state["artifacts"].append(art_dict)
+                    new_artifacts.append(art_dict)
+                    existing_uris.add(summary_art.uri)
+        
+        logger.info(f"Context summary for thread_id={thread_id}, step_idx={state.get('step_idx',0)}:\n{context_summary}\n--- end context summary ---\n\n")
 
         # Prepend system for policy
         prompt = [
@@ -448,7 +554,60 @@ async def execute_node(state: MCPState, config: RunnableConfig):
 
         for tool_call in resp.tool_calls or []:
             logger.info(f"Execute node for thread_id={thread_id}, step_idx={state.get('step_idx',0)} invoking tool call: {tool_call}")
+            thought_payload = {
+                "tool": tool_call.get("name"),
+                "args": tool_call.get("args", {}),
+            }
+            await emit({"event": "thought", "text": json.dumps(thought_payload, indent=2)})
             await emit({"event": "sandbox.stdout", "text": f"Using tool:{tool_call.get('name')} with args {json.dumps(tool_call.get('args', {}), indent=2)}\n"})
+
+        emitted_artifact_uris: set[str] = set()
+        updated_tool_messages = [m for m in all_messages if isinstance(m, ToolMessage)]
+        new_tool_messages = updated_tool_messages[prev_tool_count:]
+
+        for tm in new_tool_messages:
+            payload = _parse_tool_payload(tm) or {}
+            for step in payload.get("steps", []):
+                step_id = step.get("step")
+                status = "success" if step.get("ok", True) else "error"
+                status_payload = {
+                    "event": "sandbox.status",
+                    "step": step_id,
+                    "status": status,
+                    "plan": step.get("plan"),
+                    "summary": step.get("summary"),
+                }
+                await emit(status_payload)
+
+                code_obj = step.get("code") or {}
+                code_text = code_obj.get("text") or ""
+                if code_text.strip():
+                    filename = code_obj.get("name") or (f"step_{step_id}.py" if step_id is not None else None)
+                    await emit({
+                        "event": "code",
+                        "text": code_text,
+                        "filename": filename,
+                    })
+
+                step_artifacts = step.get("artifacts") or []
+                if step_artifacts:
+                    enriched_step_artifacts = [_prepare_artifact_preview(art) for art in step_artifacts]
+                    for art in enriched_step_artifacts:
+                        uri = art.get("uri") or art.get("path")
+                        if uri:
+                            emitted_artifact_uris.add(uri)
+                    await emit({"event": "sandbox.artifacts", "items": enriched_step_artifacts})
+
+        if new_artifacts:
+            enriched = []
+            for art in new_artifacts:
+                prepared = _prepare_artifact_preview(art)
+                uri = prepared.get("uri") or prepared.get("path")
+                if uri and uri in emitted_artifact_uris:
+                    continue
+                enriched.append(prepared)
+            if enriched:
+                await emit({"event": "sandbox.artifacts", "items": enriched})
 
         return {
             "messages": all_messages,
@@ -518,7 +677,9 @@ async def reply_node(state: MCPState, config: RunnableConfig):
         logger.exception(f"Reply node error: {e}")
         raise
 
-def route_after_clarify(state: MCPState) -> Literal["todo", "reply"]:
+def route_after_clarify(state: MCPState) -> Literal["todo", "reply", "execute"]:
+    if state.get("resume_from") == "execute":
+        return "execute"
     return "reply" if state.get("need_clarification") and state.get("clarifying_question") else "todo"
 
 async def route_after_execute(state: MCPState, config: RunnableConfig) -> Literal["tools", "reply"]:
@@ -562,13 +723,15 @@ def _build_graph():
     _builder = StateGraph(MCPState)
     _builder.add_node("clarify", clarify_node)
     _builder.add_node("todo", todo_node)
+    _builder.add_node("await_todo_feedback", await_todo_feedback_node)
     _builder.add_node("execute", execute_node)
     _builder.add_node("tools", ToolNode(tools=_tools))
     _builder.add_node("reply", reply_node)
 
     _builder.add_edge(START, "clarify")
-    _builder.add_conditional_edges("clarify", route_after_clarify, {"todo": "todo", "reply": "reply"})
-    _builder.add_edge("todo", "execute")
+    _builder.add_conditional_edges("clarify", route_after_clarify, {"todo": "todo", "reply": "reply", "execute": "execute"})
+    _builder.add_edge("todo", "await_todo_feedback")
+    _builder.add_edge("await_todo_feedback", END)
     _builder.add_conditional_edges("execute", route_after_execute, {"tools": "tools", "reply": "reply"})
     _builder.add_edge("tools", "execute")
     _builder.add_edge("reply", END)
@@ -648,6 +811,9 @@ async def ws_mcp_graph(
             step_idx=0,
             max_steps=20,
             done=False,
+            todo=None,
+            awaiting_todo_feedback=False,
+            resume_from=None,
             need_clarification=False,
             clarifying_question=None,
             artifacts=[],
@@ -661,21 +827,7 @@ async def ws_mcp_graph(
                 await ws.send_json({"event": "error", "detail": "Malformed JSON"})
                 continue
 
-            if payload.get("type") != "user_message":
-                await ws.send_json({"event": "error", "detail": "send {type:'user_message', text: ...}"})
-                continue
-
-            user_text: str = (payload.get("text") or "").strip()
-            files = payload.get("files", []) or []
-            uploaded = await _upload_ws_files(files, DEFAULT_BUCKET, base_prefix)
-            files_note = ""
-            if uploaded:
-                bullet = "\n".join([f"- {u['name']}: {u['uri']}" for u in uploaded]) # Do not need full s3:// path as base_prefix has it
-                files_note = f"\nUploaded files (S3 RELATIVE PATHS):\n{bullet}."
-
-            state["artifacts"] = uploaded
-
-            logger.info(f"WS MCP graph thread_id={tid} got user message: {user_text}{files_note}")
+            message_type = payload.get("type")
 
             config = {
                 "configurable": {
@@ -684,12 +836,87 @@ async def ws_mcp_graph(
                     "exec_ctx": {"bucket": DEFAULT_BUCKET, "base_prefix": base_prefix},
                 }
             }
-            
-            state["messages"].append(HumanMessage(content=user_text + files_note))
-            
-            result = await graph.ainvoke(state, config=config)
 
-            logger.info(f"WS MCP graph thread_id={tid} node returned updates: {result}")
+            if message_type == "user_message":
+                if state.get("awaiting_todo_feedback"):
+                    await ws.send_json({"event": "error", "detail": "Awaiting TODO approval. Approve or update the TODO list to continue."})
+                    continue
+
+                user_text: str = (payload.get("text") or "").strip()
+                files = payload.get("files", []) or []
+                uploaded = await _upload_ws_files(files, DEFAULT_BUCKET, base_prefix)
+                files_note = ""
+                if uploaded:
+                    bullet = "\n".join([f"- {u['name']}: {u['uri']}" for u in uploaded]) # Do not need full s3:// path as base_prefix has it
+                    files_note = f"\nUploaded files (S3 RELATIVE PATHS):\n{bullet}."
+
+                state["artifacts"] = uploaded
+
+                logger.info(f"WS MCP graph thread_id={tid} got user message: {user_text}{files_note}")
+
+                state["messages"].append(HumanMessage(content=user_text + files_note))
+
+                result = await graph.ainvoke(state, config=config)
+                logger.info(f"WS MCP graph thread_id={tid} node returned updates: {result}")
+                if result is not None:
+                    state = MCPState(result)
+
+            elif message_type == "todo_feedback":
+                decision = payload.get("decision")
+                comment = (payload.get("comment") or "").strip()
+                updated_markdown = (payload.get("markdown") or "").strip()
+
+                if not state.get("awaiting_todo_feedback"):
+                    await ws.send_json({"event": "error", "detail": "No TODO review pending for this thread."})
+                    continue
+
+                if decision not in {"approve", "update"}:
+                    await ws.send_json({"event": "error", "detail": "decision must be 'approve' or 'update'."})
+                    continue
+
+                if decision == "update" and not updated_markdown:
+                    await ws.send_json({"event": "error", "detail": "Provide updated TODO markdown when requesting changes."})
+                    continue
+
+                if decision == "update":
+                    state["todo"] = updated_markdown
+                    state["messages"].append(HumanMessage(content=f"User updated TODO plan:\n{updated_markdown}"))
+                    _append_cel(base_prefix, f"## User Updated TODO:\n{updated_markdown}\n")
+                    if comment:
+                        state["messages"].append(HumanMessage(content=f"User comment on TODO update: {comment}"))
+                        _append_cel(base_prefix, f"## TODO Update Comment:\n{comment}\n")
+                    await ws.send_json({"event": "todos", "markdown": updated_markdown, "requires_feedback": True, "source": "user"})
+                    logger.info(f"WS MCP graph thread_id={tid} received user TODO update.")
+                    continue
+
+                # decision == approve
+                approved_markdown = updated_markdown or state.get("todo") or ""
+                if approved_markdown:
+                    state["todo"] = approved_markdown
+                    _append_cel(base_prefix, f"## Approved TODO:\n{approved_markdown}\n")
+
+                approval_message = "User approved the TODO plan."
+                if comment:
+                    approval_message += f"\nComment: {comment}"
+
+                state["awaiting_todo_feedback"] = False
+                state["resume_from"] = "execute"
+                state["messages"].append(HumanMessage(content=approval_message))
+                if comment:
+                    _append_cel(base_prefix, f"## TODO Approval Comment:\n{comment}\n")
+
+                if approved_markdown:
+                    await ws.send_json({"event": "todos", "markdown": approved_markdown, "requires_feedback": False, "source": "approved"})
+                await ws.send_json({"event": "todos.status", "status": "approved"})
+                logger.info(f"WS MCP graph thread_id={tid} TODO plan approved by user.")
+
+                result = await graph.ainvoke(state, config=config)
+                logger.info(f"WS MCP graph thread_id={tid} resumed after TODO approval: {result}")
+                if result is not None:
+                    state = MCPState(result)
+
+            else:
+                await ws.send_json({"event": "error", "detail": "Unsupported message type"})
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")

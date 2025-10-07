@@ -21,6 +21,7 @@ import pathlib
 import time
 import os
 import logging, sys
+import json
 from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP, Context  # SDK's FastMCP, stdio-friendly
@@ -110,7 +111,8 @@ ENVIRONMENT & OUTPUT CONTRACT
 - At the very end, print the sentinel:
     DONE
 - If you recieve an s3:// path as input, you can assume it is downloaded under INPUTS_DIR/ and can be read by filename or by joining with INPUTS_DIR, `os.path.join(INPUTS_DIR, filename)`.
-
+- Respect the artifact file descriptions, if any. 
+- Prioritize using existing artifacts (in outputs/) over creating new ones.
 STYLE & SAFETY
 - Be defensive: use try/except around I/O; on failure, `print("ERROR:", message)` and STOP.
 - Prefer compact, parseable output. For tables, print `df.head(10).to_csv(index=False)` or `to_json(orient="records")` on a single line after `EVIDENCE:`.
@@ -127,7 +129,7 @@ EVAL_SYSTEM = (
     '  "eval": "short reason (1-2 sentences)",\n'
     '  "verdict": "PASS" | "FAIL",\n'
     '  "output_summary": "A brief summary of the output, include key important information"\n'
-    '  "artifacts": [ { "name": "file name", "description": "short description" }, ... ]\n'
+    '  "artifacts": [ { "name": "file name", "description": "short description", "path": "s3://path/to/artifact" }, ... ]\n'
     '  "code_artifact": { "name": "file name", "description": "short description" }\n'
     "}\n"
     "Rules:\n"
@@ -159,6 +161,7 @@ CONTEXT_SUMMARY_SYSTEM = (
     "- Your primary task is to include the Last Code Execution details in the All Execution Summary.\n"
     "- The All Execution Summary should be a comprehensive summary of all code execution steps taken so far,"
     " in as little words as possible, while retaining all key important details needed for next steps.\n"
+    "- If there are unnecessary details in the All Execution Summary, you can remove them to make space for the Last Execution details.\n"
 )
 
 PLANNER_SYSTEM = (
@@ -299,6 +302,7 @@ async def code_orchestrate(
         code_artifacts: Optional[Dict[str, Any]] = []
         last_res = None
         all_execution_summary = ""
+        step_trace: List[Dict[str, Any]] = []
 
         while step_idx < max_steps and not (completed or need_clarification):
             step_idx += 1
@@ -437,6 +441,57 @@ def list_artifacts(thread_id: str) -> Dict[str, Any]:
     """
     arts = sandbox._artifact_index(_run_dir(thread_id), only_under=sandbox.outputs_dirname)
     return {"artifacts": arts}
+
+@mcp.tool()
+def read_cel_log(thread_id: str, max_lines: int = 200) -> Dict[str, Any]:
+    """
+    Return the last max_lines lines of CEL.md for the session.
+    """
+    path = sandbox.cel_log_path(thread_id)
+    if not path.exists():
+        return {"cel_log": ""}
+    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    return {"cel_log": "\n".join(lines[-max_lines:])}
+
+# @mcp.tool()
+# def read_artifact(thread_id: str, name: str, max_bytes: int = 10000) -> Dict[str, Any]:
+#     """
+#     Return the content of an artifact file (if text-based and not too large). 
+#     Args:
+#         - thread_id: the coding session ID
+#         - name: artifact file name (e.g. "outputs/foo.csv", must contain file extension)
+#         - max_bytes: maximum bytes to read (default 10000)
+#     """
+#     # Limit file types to text-based ones
+#     allowed_exts = {".txt", ".md", ".csv", ".tsv", ".json", ".log", ".py", ".ipynb"}
+#     if not any(name.endswith(ext) for ext in allowed_exts):
+#         return {"error": f"artifact '{name}' has unsupported file extension"}
+#     artifact_local_path = None
+#     short_file_path = ""
+#     inputs_dir = artifact_analyzer._artifacts_dir(thread_id) / artifact_analyzer.inputs_dirname
+#     outputs_dir = artifact_analyzer._artifacts_dir(thread_id) / artifact_analyzer.outputs_dirname
+
+#     inp = (inputs_dir / name)
+#     out = (outputs_dir / name)
+
+#     if inp.is_file():
+#         artifact_local_path = inp
+#         short_file_path = f"{artifact_analyzer.inputs_dirname}/{name}"
+#     elif out.is_file():
+#         artifact_local_path = out
+#         short_file_path = f"{artifact_analyzer.outputs_dirname}/{name}"
+#     else:
+#         return {"error": f"artifact '{name}' not found"}
+    
+#     try:
+#         content = artifact_local_path.read_text(encoding="utf-8", errors="ignore") # Works for text, json, csv, md, py, ipynb, etc.
+#         if len(content) > max_bytes:
+#             content = content[:max_bytes] + f"\n\n... TRUNCATED to {max_bytes} bytes ..."
+#         return {"name": name, "path": short_file_path, "content": content}
+#     except Exception as e:
+#         return {"error": f"artifact '{name}' read error: {e}"}
+    
+    
 
 @mcp.tool()
 def kill_session(thread_id: str, delete_files: bool = False) -> Dict[str, bool]:

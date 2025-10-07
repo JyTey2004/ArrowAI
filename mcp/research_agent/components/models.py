@@ -17,16 +17,16 @@ class ResearchRequest(BaseModel):
         description="List of input files already available (e.g. downloaded from S3) with keys: name, path, size",
     )
 
-class SubTopic(BaseModel):
-    title: str
-    action: str # Search/analysis actions to take
-    rationale: str
-    questions: List[str] = Field(min_items=1, max_items=5)
-    country: Optional[str] = None
-
-class SearchPlan(BaseModel):
-    sub_topics: List[SubTopic] = Field(min_items=1, max_items=8)
-    
+class QuestionPlan(BaseModel):
+    rationale: Optional[str] = Field(
+        default=None,
+        description="High level reasoning connecting artifacts to the proposed questions",
+    )
+    questions: List[str] = Field(
+        min_items=1,
+        max_items=3,
+        description="Next research questions ranked by importance",
+    )
     
 class AnalysisResult(BaseModel):
     key_findings: str = Field(

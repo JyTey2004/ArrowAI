@@ -20,7 +20,6 @@ class LLMAdapter(LLMClient):
         files: Optional[Iterable[Union[str, Dict[str, Any]]]]=None,
         images: Optional[Iterable[Union[str, bytes]]]=None, 
         image_urls: Optional[Iterable[str]]=None,
-        max_output_tokens: int=800,
     ) -> str:
         resp = self.oai.generate(
             model=self.model, 
@@ -30,7 +29,6 @@ class LLMAdapter(LLMClient):
             images=images, 
             image_urls=image_urls,
             temperature=self.temperature, 
-            max_output_tokens=max_output_tokens,
         )
         return self.oai.output_text(resp) or ""
     

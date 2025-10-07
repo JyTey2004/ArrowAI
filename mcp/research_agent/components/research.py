@@ -1,13 +1,16 @@
 # mcp/research_agent/components/research.py
-import asyncio
 import datetime as dt
 import pathlib
-from typing import Any, List, Optional, Dict, Iterable, Tuple
+import json
+from typing import Any, List, Optional, Dict
+import logging
 
 from aws.s3_client import S3Client
-from components.models import SearchPlan, AnalysisResult  # ensure SubTopic has action/country
+from components.models import QuestionPlan, AnalysisResult
 from utils.LLMAdapter import LLMAdapter
 from services.perplexity_client import PerplexityClient
+
+logger = logging.getLogger(__name__)
 
 # ---- helpers ----
 def _now_iso() -> str:
@@ -53,6 +56,9 @@ class Research:
 
     def analysis_log_path(self, thread_id: str) -> pathlib.Path:
         return self._research_dir(thread_id) / "ANALYSIS_LOG.md"
+    
+    def artifacts_log_path(self, thread_id: str) -> pathlib.Path:
+        return self._research_dir(thread_id) / "ARTIFACTS_LOG.md"
 
     # ---- log utils ----
     def _ensure_file(self, path: pathlib.Path, header: str):
@@ -90,102 +96,204 @@ class Research:
     def _read_text_or_blank(self, path: pathlib.Path) -> str:
         return path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
 
+    def _normalise_result(self, item: Any) -> Dict[str, Any]:
+        if isinstance(item, dict):
+            return item
+        data = {}
+        for attr in ["title", "url", "source", "snippet", "date", "last_updated", "score", "author"]:
+            data[attr] = getattr(item, attr, None)
+        # Some SDKs expose link via `source_url` or `link`
+        if not data.get("url"):
+            data["url"] = getattr(item, "source_url", None) or getattr(item, "link", None)
+        if not data.get("snippet"):
+            data["snippet"] = getattr(item, "text", None)
+        return data
+
+    def _format_search_results(self, results: List[Any]) -> List[str]:
+        lines: List[str] = []
+        for idx, item in enumerate(results, 1):
+            data = self._normalise_result(item)
+            title = data.get("title") or f"Result {idx}"
+            url = data.get("url")
+            snippet = (data.get("snippet") or "").strip().replace("\n", " ")
+            date = data.get("date") or data.get("published_at") or "N/A"
+            score = data.get("score")
+            if url:
+                lines.append(f"- [{_md_escape(title)}]({url})")
+            else:
+                lines.append(f"- {_md_escape(title)}")
+            details = []
+            if snippet:
+                details.append(snippet)
+            if date and date != "N/A":
+                details.append(f"Date: {date}")
+            last_updated = data.get("last_updated") or data.get("updated_at")
+            if last_updated:
+                details.append(f"Updated: {last_updated}")
+            if score is not None:
+                details.append(f"Score: {score}")
+            if details:
+                lines.append("  - " + " | ".join(details))
+        if not lines:
+            lines.append("- No results returned or query failed.")
+        return lines
+
+    def _parse_analysis_json(self, payload: str) -> Dict[str, Any]:
+        try:
+            # Remove all ```json ... ``` wrappers if present
+            if payload.strip().startswith("```") and payload.strip().endswith("```"):
+                cleaned = payload.strip().strip("`").strip()
+                if cleaned.startswith("json"):
+                    cleaned = cleaned[4:].strip()
+                data = json.loads(cleaned)
+            else:
+                data = json.loads(payload)
+        except Exception:
+            try:
+                cleaned = payload.strip().strip("`")
+                data = json.loads(cleaned)
+            except Exception:
+                data = {}
+
+        summary = data.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            summary = "No summary generated."
+
+        next_questions = []
+        raw_questions = data.get("next_questions") or []
+        if isinstance(raw_questions, list):
+            for item in raw_questions:
+                if isinstance(item, str):
+                    q = item.strip()
+                    if q and q not in next_questions:
+                        next_questions.append(q)
+        next_questions = next_questions[:3]
+
+        task_answered = bool(data.get("task_answered"))
+
+        return {
+            "summary": summary.strip(),
+            "next_questions": next_questions,
+            "task_answered": task_answered,
+        }
+
     # ---- main ----
     async def research(
         self,
         thread_id: str,
         task: str,
-        search_plan: SearchPlan,
+        initial_plan: QuestionPlan,
         search_llm: PerplexityClient,
         analyze_llm: LLMAdapter,
         summary_llm: LLMAdapter,
         upload_to_s3: bool = False,
+        max_iterations: int = 5,
     ) -> AnalysisResult:
         """
-        Conduct searches and/or analyses per sub-topic, then review/aggregate findings.
-        Returns the research_report.md string (and optionally uploads logs/report to S3).
+        Iteratively search and analyse until the task can be answered or we hit max iterations.
         """
         # ensure base logs exist
         self._ensure_file(self.research_log_path(thread_id), "# Research Log")
         self._ensure_file(self.search_log_path(thread_id), "# Search Log")
         self._ensure_file(self.analysis_log_path(thread_id), "# Analysis Log")
+        self._ensure_file(self.artifacts_log_path(thread_id), "# Artifacts Log")
 
-        report_lines = [
+        questions = list(initial_plan.questions)
+        analysis_sections: List[str] = []
+        resolved = False
+
+        for iteration in range(1, max_iterations + 1):
+            queries = [q.strip() for q in questions if isinstance(q, str) and q.strip()]
+            if not queries:
+                break
+
+            results = search_llm.search(query=queries, max_results=8)
+            if isinstance(results, dict):
+                results_list = results.get("results") or results.get("sources") or []
+            else:
+                results_list = results if isinstance(results, list) else []
+            formatted_results = self._format_search_results(results_list)
+
+            search_entry_lines = [
+                f"## Iteration {iteration}",
+                "### Queries",
+                *[f"- {q}" for q in queries],
+                "",
+                "### Results",
+                *formatted_results,
+            ]
+            self._append_search_log(thread_id, "\n".join(search_entry_lines))
+
+            search_log_txt = self._read_text_or_blank(self.search_log_path(thread_id))
+            analysis_log_txt = self._read_text_or_blank(self.analysis_log_path(thread_id))
+            artifacts_log_txt = self._read_text_or_blank(self.artifacts_log_path(thread_id))
+            
+            # Split the search results to only the last 3 iterations
+            search_iterations = search_log_txt.split("## Iteration ")
+            if len(search_iterations) > 4:
+                search_log_txt = "## Iteration " + "## Iteration ".join(search_iterations[-4:])
+                
+            # Limit the analysis log to the last 3 iterations
+            analysis_iterations = analysis_log_txt.split("### Iteration ")
+            if len(analysis_iterations) > 4:
+                analysis_log_txt = "### Iteration " + "### Iteration ".join(analysis_iterations[-4:])
+   
+            analysis_prompt = (
+                f"USER_GOAL:\n{task}\n\n"
+                f"AGGREGATED_SEARCH_LOG (last 4 iterations):\n{search_log_txt}\n\n"
+                f"PRIOR_ANALYSIS (last 4 iterations):\n{analysis_log_txt}\n\n"
+                f"ARTIFACTS_LOG:\n{artifacts_log_txt}\n\n"
+                f"You are analysing iteration {iteration}.\n"
+                "Return STRICT JSON with keys: summary (markdown string), next_questions (array of up to three strings), task_answered (boolean).\n"
+                "Summary must reference insights from ALL iterations so far, clearly citing new findings this round.\n"
+                "If the task appears answered, set task_answered true and emit an empty next_questions array, but still summarize any outstanding questions or areas for further exploration.\n"
+            )
+            
+            logger.info(f"Iteration {iteration} analysis prompt: {analysis_prompt}")
+
+            analysis_raw = analyze_llm.generate(analysis_prompt)
+            logger.info(f"Iteration {iteration} analysis data: {analysis_raw}")
+            analysis_data = self._parse_analysis_json(analysis_raw)
+            summary_text = analysis_data["summary"]
+            next_questions = analysis_data["next_questions"]
+            resolved = analysis_data["task_answered"]
+            
+            self._append_analysis_log(thread_id, f"## Iteration {iteration} Summary\n{summary_text}")
+            analysis_sections.append(f"### Iteration {iteration}\n{summary_text}")
+
+            if resolved:
+                questions = []
+                break
+
+            questions = next_questions
+
+            if not questions:
+                break
+
+        report_sections = [
             "# Research Report",
             "## Task",
             task.strip(),
-            "## Findings",
+            "## Initial Questions",
+            *[f"- {q}" for q in initial_plan.questions],
         ]
 
-        for idx, sub_topic in enumerate(search_plan.sub_topics, 1):
-            title = getattr(sub_topic, "title", f"Sub-topic {idx}")
-            rationale = getattr(sub_topic, "rationale", "").strip()
-            action = (getattr(sub_topic, "action", "search") or "search").lower()
-            country = getattr(sub_topic, "country", None)
-            questions = list(getattr(sub_topic, "questions", []) or [])
+        if initial_plan.rationale:
+            report_sections.extend(["", "### Planner Rationale", initial_plan.rationale.strip()])
 
-            report_lines.append(f"### {idx}. {_md_escape(title)}")
-            if rationale:
-                report_lines.append(f"**Rationale:** {_md_escape(rationale)}")
+        if analysis_sections:
+            report_sections.extend(["", "## Iteration Summaries", "", *analysis_sections])
+        else:
+            report_sections.extend(["", "## Iteration Summaries", "No summaries generated."])
 
-            findings: List[str] = []
+        report = "\n".join(report_sections).strip() + "\n"
 
-            if action == "search":
-                results = search_llm.search(
-                    query=questions if questions else title,
-                    country=country,
-                    max_results=5
-                )
-                if questions:
-                    findings.append(f"**Search Queries:** " + ", ".join(_md_escape(q) for q in questions))
-
-                # pretty-print search results
-                for r in results: # result object from Perplexity
-                    t = getattr(r, "title", "No Title")
-                    u = getattr(r, "url", None)
-                    s = getattr(r, "snippet", "").strip().replace("\n", " ")
-                    d = getattr(r, "date") or "N/A"
-                    lu = getattr(r, "last_updated") or "N/A"
-                    if u:
-                        findings.append(f"- [{t}]({u})\n  - {s}\n  - Date: {d}\n  - Last Updated: {lu}")
-                    else:
-                        findings.append(f"- {t}\n  - {s}")
-
-                # append to SEARCH_LOG
-                self._append_search_log(
-                    thread_id,
-                    f"### {title}\n" + "\n".join(findings)
-                )
-
-            elif action == "analysis":
-                research_log = self._read_text_or_blank(self.research_log_path(thread_id))
-                search_log = self._read_text_or_blank(self.search_log_path(thread_id))
-                q_block = "".join(f"- {q}\n" for q in questions)
-                prompt = (
-                    f"RESEARCH_LOG.md:\n{research_log}\n\n"
-                    f"SEARCH_LOG.md:\n{search_log}\n\n"
-                    f"Questions:\n{q_block}\n"
-                    f"Instruction: Provide a concise, sourced synthesis answering the questions. "
-                    f"Use bullet points and short paragraphs."
-                )
-                analysis_result = analyze_llm.generate(prompt)
-                findings.append(analysis_result.strip())
-                self._append_analysis_log(thread_id, f"### {title}\n{analysis_result.strip()}")
-
-            else:
-                findings.append(f"_Unsupported action '{action}'. Skipping._")
-
-            if findings:
-                report_lines.extend(findings)
-            else:
-                report_lines.append("**Findings:** No findings available.")
-
-            report_lines.append("\n---\n")
-
-        report = "\n".join(report_lines).strip() + "\n"
-        
         artifacts = []
-
+                                          
+        search_log_snapshot = self._read_text_or_blank(self.search_log_path(thread_id))
+        analysis_log_snapshot = self._read_text_or_blank(self.analysis_log_path(thread_id))
+        research_log_snapshot = self._read_text_or_blank(self.research_log_path(thread_id))
+        
         # optional S3 uploads
         if upload_to_s3 and self.s3_client:
             base_key = f"{self.s3_prefix}/{thread_id}/artifacts/research"
@@ -212,12 +320,17 @@ class Research:
                     except Exception:
                         # non-fatal
                         pass
-                      
                     
         summary_prompt = (
             f"Task:\n{task}\n\n"
-            f"Research Report:\n{report}\n\n"
-            f"Artifacts:\n" + "\n".join(f"- {a['name']} ({a['path']}) size: {a['size']} bytes" for a in artifacts) + "\n\n"
+            f"Initial Questions:\n" + "\n".join(f"- {q}" for q in initial_plan.questions) + "\n\n"
+            f"Research Log:\n{research_log_snapshot}\n\n"
+            f"Search Log:\n{search_log_snapshot}\n\n"
+            f"Analysis Log:\n{analysis_log_snapshot}\n\n"
+            f"Research Report Draft:\n{report}\n\n"
+            f"Artifacts:\n" + "\n".join(
+                f"- {a['name']} ({a['path']}) size: {a['size']} bytes" for a in artifacts
+            ) + "\n\n"
             f"JSON Schema:\n{AnalysisResult.model_json_schema()}\n\n"
         )
         summary_raw = summary_llm.generate(summary_prompt)
@@ -235,8 +348,18 @@ class Research:
         
         self._append_log(
             self.research_log_path(thread_id),
-            f"\n## Summary\n\n{summary.strip()}\n",
+            f"\n## Summary\n\n{summary.strip()}\n---",
             "# Research Log"
         )
-
+        
+        # Update the research_report.md with final summary
+        report_path = self._research_dir(thread_id) / "research_report.md"
+        report_path.write_text(report, encoding="utf-8")
+        if upload_to_s3 and self.s3_client:
+            key = f"{self.s3_prefix}/{thread_id}/artifacts/research/research_report.md"
+            try:
+                self.s3_client.put_file(str(report_path), key)
+            except Exception:
+                pass  # non-fatal
+        
         return summary_obj

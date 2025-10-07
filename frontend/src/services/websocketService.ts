@@ -16,8 +16,10 @@ export interface ArtifactItem {
 export interface WebSocketCallbacks {
     onNode?: (name: string, step?: number) => void;
     onClarify?: (question: string) => void;
-    onTodos?: (markdown: string) => void;
+    onTodos?: (markdown: string, requiresFeedback?: boolean, source?: string) => void;
     onCode?: (text: string, filename?: string) => void;
+    onThought?: (thought: string) => void;
+    onStatus?: (payload: Record<string, unknown>) => void;
     onStdout?: (text: string) => void;
     onStderr?: (text: string) => void;
     onArtifacts?: (items: ArtifactItem[]) => void;
@@ -28,6 +30,7 @@ export interface WebSocketCallbacks {
     onFileUploadProgress?: (progress: number, fileName: string) => void;
     onFileUploadComplete?: (fileName: string) => void;
     onFileUploadError?: (error: string, fileName: string) => void;
+    onTodoStatus?: (status: string) => void;
 }
 
 export interface FileUpload {
@@ -36,6 +39,12 @@ export interface FileUpload {
     size: number;
     type: string;
     content?: string | ArrayBuffer;
+}
+
+export interface TodoFeedbackPayload {
+    decision: 'approve' | 'update';
+    markdown?: string;
+    comment?: string;
 }
 
 export class AIWebSocketService {
@@ -117,11 +126,20 @@ export class AIWebSocketService {
                 break;
 
             case 'todos':
-                this.callbacks.onTodos?.(data.markdown);
+                this.callbacks.onTodos?.(data.markdown, data.requires_feedback, data.source);
+                break;
+            case 'todos.status':
+                this.callbacks.onTodoStatus?.(data.status);
                 break;
 
             case 'code':
                 this.callbacks.onCode?.(data.text, data.filename);
+                break;
+            case 'thought':
+                this.callbacks.onThought?.(data.text);
+                break;
+            case 'sandbox.status':
+                this.callbacks.onStatus?.(data);
                 break;
 
             case 'sandbox.stdout':
@@ -278,6 +296,26 @@ export class AIWebSocketService {
             type: 'user_message',
             text
         };
+
+        this.ws.send(JSON.stringify(message));
+    }
+
+    sendTodoFeedback(payload: TodoFeedbackPayload) {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            throw new Error('WebSocket is not connected');
+        }
+
+        const message: Record<string, unknown> = {
+            type: 'todo_feedback',
+            decision: payload.decision,
+        };
+
+        if (payload.markdown) {
+            message.markdown = payload.markdown;
+        }
+        if (payload.comment) {
+            message.comment = payload.comment;
+        }
 
         this.ws.send(JSON.stringify(message));
     }

@@ -2,8 +2,7 @@
 """
 Analyzer component for the Research pipeline.
 - Reads/understands artifacts
-- Derives sub-topics from (goal + artifacts)
-- Returns a SearchPlan (list of SubTopics with rationale + questions)
+- Produces a focused set of research questions aligned to the user goal.
 """
 
 import re
@@ -12,7 +11,7 @@ import json
 
 from typing import Any, List, Optional
 from aws.s3_client import S3Client
-from components.models import File, SearchPlan
+from components.models import File, QuestionPlan
 from pydantic import ValidationError
 from utils.LLMAdapter import LLMAdapter
 
@@ -24,12 +23,10 @@ ANY_BLOCK  = re.compile(r"```\s*\n(.*?)\n```", re.DOTALL)
 
 class Analyzer:
   """
-  Research pipeline that:
+  Research planning component that:
     1) Reads/understands artifacts
-    2) Derives sub-topics from (goal + artifacts)
-    3) Searches per sub-topic (search_llm)
-    4) Reviews/aggregates findings (analyze_llm)
-    5) Renders a research_report.md (returned as text)
+    2) Appends findings to the research log
+    3) Derives an initial list of research questions (max three)
   """
 
   def __init__(
@@ -51,20 +48,21 @@ class Analyzer:
     
   def research_log_path(self, thread_id: str) -> pathlib.Path:
       return self._research_dir(thread_id) / "RESEARCH_LOG.md"
-
-  def sub_topics_path(self, thread_id: str) -> pathlib.Path:
-      return self._research_dir(thread_id) / "SUB_TOPICS.md"
-
-  def add_sub_topic(self, thread_id: str, content: str) -> None:
-      p = self.sub_topics_path(thread_id)
-      p.parent.mkdir(parents=True, exist_ok=True)
-      prev = p.read_text(encoding="utf-8", errors="ignore") if p.exists() else "# Sub Topics\n\n"
-      p.write_text(prev + content + "\n", encoding="utf-8")
+    
+  def _artifacts_log_path(self, thread_id: str) -> pathlib.Path:
+      return self._research_dir(thread_id) / "ARTIFACTS_LOG.md"
 
   def _append_research_log(self, thread_id: str, text: str) -> None:
       logf = self.research_log_path(thread_id)
       logf.parent.mkdir(parents=True, exist_ok=True)
       header = "# Research Log\n\n"
+      prev = logf.read_text(encoding="utf-8", errors="ignore") if logf.exists() else header
+      logf.write_text(prev + text + "\n", encoding="utf-8")
+      
+  def _append_artifacts_log(self, thread_id: str, text: str) -> None:
+      logf = self._artifacts_log_path(thread_id)
+      logf.parent.mkdir(parents=True, exist_ok=True)
+      header = "# Artifacts Log\n\n"
       prev = logf.read_text(encoding="utf-8", errors="ignore") if logf.exists() else header
       logf.write_text(prev + text + "\n", encoding="utf-8")
 
@@ -159,39 +157,73 @@ class Analyzer:
           return json.loads(repaired)
       except Exception:
           # last ditch: return empty shape you expect
-          return {"sub_topics": []}
-        
-  @staticmethod
-  def validate_plan(plan_dict: dict) -> SearchPlan:
-    try:
-        return SearchPlan(**plan_dict)
-    except ValidationError as e:
-        logger.warning(f"Search plan validation failed: {e}")
-        # degrade gracefully
-        return SearchPlan(sub_topics=[])
+          return {"questions": [], "rationale": ""}
 
-  async def analyze(self, thread_id:str, user_goal: str, artifacts: List[File], artifact_llm: LLMAdapter, analyze_llm: LLMAdapter) -> SearchPlan:
+  def _fallback_questions(self, user_goal: str) -> List[str]:
+      topic = (user_goal or "the topic").strip().rstrip("?")
+      if not topic:
+          topic = "the topic"
+      return [
+          f"What is the current landscape for {topic}?",
+          f"What recent developments or data points matter most for {topic}?",
+          f"What open questions remain about {topic}?",
+      ]
+
+  def _build_question_plan(self, data: dict, user_goal: str) -> QuestionPlan:
+      raw_questions = data.get("questions") or []
+      cleaned: List[str] = []
+      for item in raw_questions:
+          if isinstance(item, str):
+              q = item.strip()
+              if q and q not in cleaned:
+                  cleaned.append(q)
+
+      if not cleaned:
+          cleaned = []
+
+      fallback = self._fallback_questions(user_goal)
+      while len(cleaned) < 3 and fallback:
+          candidate = fallback[len(cleaned)]
+          if candidate not in cleaned:
+              cleaned.append(candidate)
+
+      # Ensure max three questions
+      cleaned = cleaned[:3] if cleaned else fallback[:3]
+
+      rationale = data.get("rationale")
+      if isinstance(rationale, str):
+          rationale = rationale.strip() or None
+      else:
+          rationale = None
+
+      return QuestionPlan(questions=cleaned, rationale=rationale)
+
+  async def analyze(self, thread_id:str, user_goal: str, artifacts: List[File], artifact_llm: LLMAdapter, analyze_llm: LLMAdapter) -> QuestionPlan:
       """
       Research the analysis pipeline.
       - user_goal: user goal / topic
       - artifacts: list of {"name": ..., "path": ..., "size": ...} (local files)
-      - returns: {"report_md": "...", "other_findings": ...}
+      - returns: QuestionPlan with up to three prioritized questions
       """
       # 1) Read/understand artifacts
       # 2) Returns a subtopic list + preliminary findings
       try:
         if artifacts:
-          self._append_research_log(
-            thread_id,
-            f"## Artifacts meta"
-          )
-
+          
+          artifact_log = self._artifacts_log_path(thread_id)
+          artifact_log.parent.mkdir(parents=True, exist_ok=True)
+          artifact_log_txt = artifact_log.read_text(encoding="utf-8", errors="ignore") # this will be empty if file doesn't exist
+                    
           # Read and understand the Artifacts
           for a in artifacts:  
+            if a.name in artifact_log_txt:
+              logger.info(f"Skipping previously analyzed artifact: {a.name}")
+              continue  # skip already analyzed artifacts
+            
             file_type = self.guess_file_type(a.name)
             
             if file_type in {"unknown"}:
-              self._append_research_log(
+              self._append_artifacts_log(
                 thread_id,
                 f"- **{a.name}:** \n  - Skipped (unsupported file type)\n\n"
               )
@@ -207,7 +239,7 @@ class Analyzer:
               result = artifact_llm.response(artifact_prompt)
               result = self._extract_markdown(result)
 
-              self._append_research_log(
+              self._append_artifacts_log(
                 thread_id,
                 f"### **{a.name}:** \n{result}\n\n"
               )
@@ -220,48 +252,48 @@ class Analyzer:
                 artifact_prompt = self.text_analyze_prompt(user_goal, a.name, content_str)
                 result = artifact_llm.response(artifact_prompt)
                 result = self._extract_markdown(result)
-                self._append_research_log(
+                self._append_artifacts_log(
                   thread_id,
                   f"### **{a.name}:** \n{result}\n\n"
                 )
         else:
-          self._append_research_log(
-            thread_id,
-            "## No artifacts provided\n\n"
-          )
+          pass
           
         # 2) Derive sub-topics from (goal + artifacts)
         research_log = self.research_log_path(thread_id).read_text(encoding="utf-8", errors="ignore")
+        artifact_log = self._artifacts_log_path(thread_id).read_text(encoding="utf-8", errors="ignore")
 
-        sub_topics_raw = analyze_llm.generate(f"RESEARCH_LOG: {research_log}\n\n")
-        
-        logger.info(f"Raw sub-topics output: {sub_topics_raw}")
-        
-        plan = self.try_parse_json(sub_topics_raw)
-        # Sub-Topics in markdown
-        for sub_topic in plan.get("sub_topics", []):
-          if isinstance(sub_topic, dict):
-            title = sub_topic.get("title", "No title")
-            rationale = sub_topic.get("rationale", "No rationale")
-            questions = sub_topic.get("questions", [])
-            action = sub_topic.get("action", "Search/Analysis")
-            questions_md = "\n".join([f"  - {q}" for q in questions])
-            self.add_sub_topic(
-              thread_id,
-              f"### {title}\n**Action:** {action}\n**Rationale:** {rationale}\n**Questions:**\n{questions_md}\n"
-            )
-        
-        plan = self.validate_plan(plan)
-        return plan
+        planner_raw = analyze_llm.generate(
+          f"USER_GOAL: {user_goal}\n\n"
+          f"ARTIFACTS_LOG:\n{artifact_log if artifact_log else 'No artifacts provided.'}\n\n"
+          f"RESEARCH_LOG:\n{research_log}\n\n"
+          "Return strictly formatted JSON as instructed."
+          f"Json Schema: {QuestionPlan.model_json_schema()}"
+        )
+
+        logger.info(f"Generated initial questions: {planner_raw}")
+
+        plan_dict = self.try_parse_json(planner_raw)
+        question_plan = self._build_question_plan(plan_dict, user_goal)
+
+        questions_md = "\n".join([f"- {q}" for q in question_plan.questions])
+        self._append_research_log(
+          thread_id,
+          (
+            "## Initial Research Questions\n"
+            f"{question_plan.rationale or 'Derived from artifact review.'}\n\n"
+            f"{questions_md}\n"
+          )
+        )
+
+        return question_plan
       except Exception as e:
         logger.info(f"Error from Analyzer: {e}")
-        
-          
-        
-
-      
-
-        
-
-        
+        fallback_plan = QuestionPlan(questions=self._fallback_questions(user_goal))
+        self._append_research_log(
+          thread_id,
+          "## Initial Research Questions\nPlanner failed, using fallback prompts.\n"
+          + "\n".join(f"- {q}" for q in fallback_plan.questions)
+        )
+        return fallback_plan
         
