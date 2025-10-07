@@ -3,7 +3,7 @@ import React, { useMemo, useState, useCallback } from 'react';
 import styled from 'styled-components';
 import {
   X, Download, Maximize2, Minimize2, Code2, FileText,
-  BarChart, Check, Eye, Code, Copy
+  BarChart, Check, Eye, Code, Copy, Image as ImageIcon, ExternalLink
 } from 'lucide-react';
 import type { Artifact } from '../../types/chat';
 
@@ -11,11 +11,11 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSlug from 'rehype-slug';
 import rehypeAutolinkHeadings from 'rehype-autolink-headings';
-import rehypeSanitize from 'rehype-sanitize';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-// You can switch theme; these are tree-shaken CSS-in-JS objects.
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import Papa from 'papaparse';
 
 // Map common aliases Prism expects
 const LANGUAGE_ALIASES: Record<string, string> = {
@@ -26,6 +26,27 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   sh: 'bash',
   py: 'python',
   yml: 'yaml',
+};
+
+// Create a custom sanitize schema that allows tables and other GFM elements
+const sanitizeSchema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    td: ['align', 'colSpan', 'rowSpan'],
+    th: ['align', 'colSpan', 'rowSpan', 'scope'],
+    table: ['className'],
+  },
+  tagNames: [
+    ...(defaultSchema.tagNames || []),
+    'table',
+    'thead',
+    'tbody',
+    'tfoot',
+    'tr',
+    'th',
+    'td',
+  ],
 };
 
 interface ArtifactPanelProps {
@@ -177,7 +198,7 @@ const CodeBlockOuter = styled.div`
   flex: 1; overflow: auto;
   .code-line {
     display: block;
-    white-space: pre-wrap;        /* soft-wrap long lines */
+    white-space: pre-wrap;
     word-break: break-word;
   }
   pre {
@@ -187,6 +208,39 @@ const CodeBlockOuter = styled.div`
     font-family: 'SF Mono','Monaco','Cascadia Code','Roboto Mono',monospace !important;
     font-size: 13px !important;
     line-height: 1.6 !important;
+  }
+`;
+
+const ImagePreviewContainer = styled.div`
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 20px;
+  overflow: auto;
+`;
+
+const PreviewImage = styled.img`
+  max-width: 100%;
+  max-height: 80vh;
+  border-radius: 12px;
+  border: 1px solid ${p => p.theme.glassBorder};
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+`;
+
+const PreviewNotice = styled.div`
+  font-size: 12px;
+  color: ${p => p.theme.textSecondary};
+  background: ${p => p.theme.glassBackground};
+  border: 1px solid ${p => p.theme.glassBorder};
+  border-radius: 8px;
+  padding: 8px 12px;
+  text-align: center;
+  a {
+    color: ${p => p.theme.accent};
+    font-weight: 600;
   }
 `;
 
@@ -208,9 +262,43 @@ const MarkdownContent = styled.div`
     background: ${p => p.theme.glassBackground};
     border-radius: 0 8px 8px 0; color: ${p => p.theme.textSecondary}; font-style: italic;
   }
-  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 13px; }
-  th,td { border: 1px solid ${p => p.theme.glassBorder}; padding: 8px 12px; text-align: left; }
-  th { background: ${p => p.theme.glassBackground}; font-weight: 600; }
+  
+  /* Enhanced table styles */
+  table { 
+    border-collapse: collapse; 
+    width: 100%; 
+    margin: 16px 0; 
+    font-size: 13px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  thead {
+    background: ${p => p.theme.glassBackground};
+  }
+  th {
+    border: 1px solid ${p => p.theme.glassBorder}; 
+    padding: 12px 16px; 
+    text-align: left;
+    font-weight: 600;
+    background: ${p => p.theme.glassHover};
+    color: ${p => p.theme.textPrimary};
+  }
+  td {
+    border: 1px solid ${p => p.theme.glassBorder}; 
+    padding: 10px 16px; 
+    text-align: left;
+  }
+  tbody tr {
+    transition: background-color 0.15s ease;
+  }
+  tbody tr:hover {
+    background: ${p => p.theme.glassBackground};
+  }
+  tbody tr:nth-child(even) {
+    background: rgba(0, 0, 0, 0.02);
+  }
+  
   hr { border: none; border-top: 1px solid ${p => p.theme.glassBorder}; margin: 24px 0; }
 
   code {
@@ -223,6 +311,75 @@ const MarkdownContent = styled.div`
   pre > code { background: transparent; border: 0; padding: 0; color: inherit; }
   a { color: ${p => p.theme.accent}; text-decoration: underline; }
   a:hover { text-decoration: none; opacity: .85; }
+`;
+
+const CsvTableContainer = styled.div`
+  flex: 1; 
+  overflow: auto;
+  padding: 20px;
+`;
+
+const CsvTable = styled.table`
+  border-collapse: collapse; 
+  width: 100%; 
+  font-size: 13px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  overflow: hidden;
+  
+  thead {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: ${p => p.theme.glassHover};
+  }
+  
+  th {
+    border: 1px solid ${p => p.theme.glassBorder}; 
+    padding: 12px 16px; 
+    text-align: left;
+    font-weight: 600;
+    background: ${p => p.theme.glassHover};
+    color: ${p => p.theme.textPrimary};
+    white-space: nowrap;
+  }
+  
+  td {
+    border: 1px solid ${p => p.theme.glassBorder}; 
+    padding: 10px 16px; 
+    text-align: left;
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  
+  tbody tr {
+    transition: background-color 0.15s ease;
+  }
+  
+  tbody tr:hover {
+    background: ${p => p.theme.glassBackground};
+  }
+  
+  tbody tr:nth-child(even) {
+    background: rgba(0, 0, 0, 0.02);
+  }
+`;
+
+const CsvInfo = styled.div`
+  padding: 12px 20px;
+  background: ${p => p.theme.glassBackground};
+  border-bottom: 1px solid ${p => p.theme.glassBorder};
+  font-size: 12px;
+  color: ${p => p.theme.textSecondary};
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  
+  strong {
+    color: ${p => p.theme.textPrimary};
+    font-weight: 600;
+  }
 `;
 
 const EmptyState = styled.div`
@@ -238,6 +395,7 @@ const getArtifactIcon = (type: string) => {
     case 'code': return <Code2 size={18} />;
     case 'document': return <FileText size={18} />;
     case 'chart': return <BarChart size={18} />;
+    case 'image': return <ImageIcon size={18} />;
     default: return <Code2 size={18} />;
   }
 };
@@ -247,6 +405,7 @@ const getArtifactTypeLabel = (type: string) => {
     case 'code': return 'Code Artifact';
     case 'document': return 'Document';
     case 'chart': return 'Chart';
+    case 'image': return 'Image';
     default: return 'Artifact';
   }
 };
@@ -260,7 +419,6 @@ const normalizeLang = (lang?: string) => {
 const inferExtension = (language?: string, fallback = 'txt') => {
   const lang = normalizeLang(language);
   if (!lang) return fallback;
-  // light mapping; extend as needed
   const map: Record<string, string> = {
     typescript: 'ts', tsx: 'tsx', ts: 'ts',
     javascript: 'js', jsx: 'jsx', js: 'js',
@@ -272,6 +430,21 @@ const inferExtension = (language?: string, fallback = 'txt') => {
     html: 'html', css: 'css', scss: 'scss',
   };
   return map[lang] ?? fallback;
+};
+
+const formatBytes = (bytes?: number): string | undefined => {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes <= 0) {
+    return undefined;
+  }
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const precision = value < 10 && unitIndex > 0 ? 1 : 0;
+  return `${value.toFixed(precision)} ${units[unitIndex]}`;
 };
 
 export const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
@@ -287,6 +460,29 @@ export const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
       lang === 'markdown' || lang === 'md';
   }, [artifact]);
 
+  const isCsv = useMemo(() => {
+    if (!artifact?.content) return false;
+    const lang = artifact.language?.toLowerCase();
+    const ext = artifact.filename?.toLowerCase().split('.').pop();
+    return lang === 'csv' || ext === 'csv';
+  }, [artifact]);
+
+  const parsedCsvData = useMemo(() => {
+    if (!isCsv || !artifact?.content) return null;
+    try {
+      const result = Papa.parse(artifact.content, {
+        header: true,
+        skipEmptyLines: true,
+        dynamicTyping: true,
+        delimitersToGuess: [',', '\t', '|', ';']
+      });
+      return result.data.length > 0 ? result : null;
+    } catch (e) {
+      console.error('CSV parse error:', e);
+      return null;
+    }
+  }, [isCsv, artifact]);
+
   const handleCopy = useCallback(async (text?: string) => {
     const value = text ?? artifact?.content ?? '';
     if (!value) return;
@@ -300,6 +496,10 @@ export const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   }, [artifact]);
 
   const handleDownload = () => {
+    if (artifact?.downloadUrl) {
+      window.open(artifact.downloadUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
     if (!artifact?.content) return;
 
     const blob = new Blob([artifact.content], { type: 'text/plain' });
@@ -307,9 +507,9 @@ export const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
     const a = document.createElement('a');
     a.href = url;
 
-    // Use the filename if available, otherwise generate one
+    const fallbackExt = artifact.type === 'image' ? 'png' : 'txt';
     const downloadName = artifact.filename ||
-      `${artifact.title.toLowerCase().replace(/\s+/g, '-')}.${artifact.language || 'txt'}`;
+      `${artifact.title.toLowerCase().replace(/\s+/g, '-')}.${inferExtension(artifact.language, fallbackExt)}`;
 
     a.download = downloadName;
     document.body.appendChild(a);
@@ -319,6 +519,15 @@ export const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
   };
 
   const codeLanguage = useMemo(() => normalizeLang(artifact?.language), [artifact]);
+  const headerSubtitle = useMemo(() => {
+    if (!artifact) return 'Artifact';
+    const parts: string[] = [getArtifactTypeLabel(artifact.type)];
+    const sizeLabel = formatBytes(artifact.size);
+    if (sizeLabel) parts.push(sizeLabel);
+    if (artifact.truncated) parts.push('Preview truncated');
+    if (artifact.isLarge) parts.push('Large file');
+    return parts.join(' • ');
+  }, [artifact]);
 
   if (!artifact) {
     return (
@@ -355,7 +564,7 @@ export const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
           </IconContainer>
           <HeaderText>
             <h3>{artifact.filename || artifact.title}</h3>
-            <p>{getArtifactTypeLabel(artifact.type)}</p>
+            <p>{headerSubtitle}</p>
           </HeaderText>
         </HeaderInfo>
 
@@ -372,7 +581,7 @@ export const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         </HeaderActions>
       </PanelHeader>
 
-      {(isMarkdown || artifact.type === 'document') && (
+      {artifact.type === 'document' && isMarkdown && (
         <ViewToggle>
           <ViewButton $active={viewMode === 'rendered'} onClick={() => setViewMode('rendered')}>
             <Eye size={12} /> Rendered
@@ -383,8 +592,18 @@ export const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
         </ViewToggle>
       )}
 
+      {isCsv && parsedCsvData && (
+        <ViewToggle>
+          <ViewButton $active={viewMode === 'rendered'} onClick={() => setViewMode('rendered')}>
+            <BarChart size={12} /> Table
+          </ViewButton>
+          <ViewButton $active={viewMode === 'raw'} onClick={() => setViewMode('raw')}>
+            <Code size={12} /> Raw
+          </ViewButton>
+        </ViewToggle>
+      )}
+
       <ContentArea>
-        {/* CODE ARTIFACT */}
         {artifact.type === 'code' ? (
           <CodeContainer>
             <CodeHeader>
@@ -407,26 +626,84 @@ export const ArtifactPanel: React.FC<ArtifactPanelProps> = ({
               </SyntaxHighlighter>
             </CodeBlockOuter>
           </CodeContainer>
-        ) : (
-          // DOCUMENT / MARKDOWN ARTIFACT
+        ) : artifact.type === 'image' ? (
+          <ImagePreviewContainer>
+            {artifact.downloadUrl ? (
+              <PreviewImage
+                src={artifact.downloadUrl}
+                alt={artifact.filename || artifact.title}
+              />
+            ) : (
+              <PreviewNotice>No image preview available.</PreviewNotice>
+            )}
+            {artifact.content && artifact.content !== artifact.downloadUrl && (
+              <PreviewNotice>
+                <ReactMarkdown rehypePlugins={[[rehypeSanitize, sanitizeSchema]]} remarkPlugins={[remarkGfm]}>
+                  {artifact.content}
+                </ReactMarkdown>
+              </PreviewNotice>
+            )}
+            {artifact.downloadUrl && (
+              <PreviewNotice>
+                <a href={artifact.downloadUrl} target="_blank" rel="noopener noreferrer">
+                  <ExternalLink size={12} /> Open original
+                </a>
+              </PreviewNotice>
+            )}
+          </ImagePreviewContainer>
+        ) : isCsv && parsedCsvData && viewMode === 'rendered' ? (
           <>
+            <CsvInfo>
+              <span><strong>{parsedCsvData.data.length}</strong> rows</span>
+              <span><strong>{parsedCsvData.meta.fields?.length || 0}</strong> columns</span>
+            </CsvInfo>
+            <CsvTableContainer>
+              <CsvTable>
+                <thead>
+                  <tr>
+                    {parsedCsvData.meta.fields?.map((field: string, idx: number) => (
+                      <th key={idx}>{field}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {parsedCsvData.data.map((row: any, rowIdx: number) => (
+                    <tr key={rowIdx}>
+                      {parsedCsvData.meta.fields?.map((field: string, colIdx: number) => (
+                        <td key={colIdx} title={String(row[field] ?? '')}>
+                          {row[field] !== null && row[field] !== undefined ? String(row[field]) : ''}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </CsvTable>
+            </CsvTableContainer>
+          </>
+        ) : (
+          <>
+            {(artifact.truncated || artifact.isLarge) && artifact.downloadUrl && (
+              <PreviewNotice>
+                {artifact.truncated ? 'Preview truncated.' : 'Preview limited due to file size.'}{' '}
+                <a href={artifact.downloadUrl} target="_blank" rel="noopener noreferrer">
+                  Download full file
+                </a>
+              </PreviewNotice>
+            )}
             {isMarkdown && viewMode === 'rendered' ? (
               <MarkdownContent>
                 <ReactMarkdown
-                  // Security: sanitize any embedded HTML (and you can restrict the schema further if needed)
                   rehypePlugins={[
                     rehypeSlug,
                     [rehypeAutolinkHeadings, { behavior: 'wrap' }],
-                    rehypeSanitize
+                    [rehypeSanitize, sanitizeSchema]
                   ]}
                   remarkPlugins={[remarkGfm]}
-                // Don't render raw HTML directly if you want to be stricter:
                 >
                   {artifact.content}
                 </ReactMarkdown>
               </MarkdownContent>
             ) : (
-              // RAW VIEW
               <CodeContainer>
                 <CodeHeader>
                   <LanguageBadge>{normalizeLang(artifact.language) ?? 'text'}</LanguageBadge>

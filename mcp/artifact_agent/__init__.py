@@ -1,0 +1,4 @@
+"""
+Artifact MCP server package.
+"""
+

@@ -21,13 +21,13 @@ interface ChatContextType {
   currentView: 'home' | 'all-chats';
   setCurrentView: (view: 'home' | 'all-chats') => void;
   messages: Message[];
-  addMessage: (message: Omit<Message, 'id' | 'timestamp'>) => void;
   isLoading: boolean;
   setIsLoading: (loading: boolean) => void;
   artifacts: Artifact[];
   activeArtifact: string | null;
   setActiveArtifact: (artifactId: string | null) => void;
-  addArtifact: (artifact: Omit<Artifact, 'id'>) => void;
+  addMessage: (message: Omit<Message, 'id' | 'timestamp'>) => string;
+  addArtifact: (artifact: Omit<Artifact, 'id'>) => string;
   sendMessage: (text: string, files?: File[]) => Promise<void>;
   isConnected: boolean;
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -76,6 +76,9 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
   const [fileUploads, setFileUploads] = useState<FileUploadState[]>([]);
 
   const wsService = useRef<AIWebSocketService | null>(null);
+  const toolStepCounter = useRef(0);
+  const toolStepMessageMap = useRef<Record<number, string>>({});
+  const lastToolStepRef = useRef(0);
 
   // Initialize WebSocket service (don't connect yet)
   useEffect(() => {
@@ -169,6 +172,34 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
         });
       },
 
+      onToolCall: ({ tool, description, args, server }) => {
+        const step = toolStepCounter.current + 1;
+        toolStepCounter.current = step;
+        lastToolStepRef.current = step;
+
+        const lines: string[] = [];
+        const toolLabel = tool ? `**${tool}**` : 'Unknown tool';
+        const serverTag = server ? ` _(via ${server})_` : '';
+        lines.push(`🛠️ **Tool Call (Step ${step}):** ${toolLabel}${serverTag}`);
+        if (description) {
+          lines.push(description);
+        }
+        if (args && Object.keys(args).length > 0) {
+          lines.push('');
+          lines.push('**Arguments:**');
+          lines.push('```json');
+          lines.push(JSON.stringify(args, null, 2));
+          lines.push('```');
+        }
+
+        const messageId = addMessage({
+          text: lines.join('\n'),
+          isUser: false,
+          toolStep: step,
+        });
+        toolStepMessageMap.current[step] = messageId;
+      },
+
       onStatus: (payload) => {
         const stepNumber = typeof payload.step === 'number' ? payload.step : (payload.step ?? '?');
         const statusText = typeof payload.status === 'string' ? payload.status.toUpperCase() : 'IN PROGRESS';
@@ -209,19 +240,90 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
 
       onArtifacts: (items) => {
         if (items && items.length > 0) {
-          items.forEach((item, index) => {
+          items.forEach((item) => {
             const filename = item.filename || item.name;
             const language = detectLanguageFromFilename(filename) || item.language;
+            const previewType = item.preview_type || item.previewType;
+            const downloadUrl = item.download_url || item.view_url || item.url;
+            const truncated = Boolean(item.truncated);
+            const size = typeof item.size === 'number' ? item.size : undefined;
+            const isLarge = Boolean(item.is_large ?? item.isLarge);
+            const stepFromItem = typeof item.step === 'number' ? item.step : lastToolStepRef.current || toolStepCounter.current;
+            const targetMessageId = stepFromItem ? toolStepMessageMap.current[stepFromItem] : undefined;
 
-            addMessage({
-              text: `📎 **Artifact ${index + 1}:** ${filename || 'Generated Artifact'}`,
-              isUser: false,
-              hasArtifact: true,
-              artifactType: item.type || 'document',
-              artifactContent: item.content || JSON.stringify(item, null, 2),
-              artifactLanguage: language,
-              artifactFilename: filename,
-            });
+            let artifactType = item.type || 'document';
+            if (!artifactType && previewType === 'image') {
+              artifactType = 'image';
+            }
+            if (artifactType === 'image' && !downloadUrl && typeof item.content !== 'string') {
+              artifactType = 'document';
+            }
+
+            let artifactContent: string;
+            if (previewType === 'image' && downloadUrl) {
+              artifactContent = `![${filename || 'image'}](${downloadUrl})`;
+            } else if (typeof item.content === 'string' && item.content.trim().length > 0) {
+              artifactContent = item.content;
+            } else if (downloadUrl) {
+              artifactContent = `Download the artifact here: ${downloadUrl}`;
+            } else {
+              artifactContent = JSON.stringify(item, null, 2);
+            }
+
+            if (isLarge && downloadUrl) {
+              artifactContent += `\n\n_(Preview trimmed due to size. Download link provided.)_`;
+            }
+
+            const artifactPayload: Omit<Artifact, 'id'> = {
+              type: artifactType,
+              title: filename || 'Generated Artifact',
+              content: artifactContent,
+              language,
+              filename,
+              messageId: targetMessageId,
+              downloadUrl,
+              previewType,
+              size,
+              truncated,
+              metadata: item,
+              isLarge,
+            };
+
+            if (targetMessageId) {
+              const artifactId = addArtifact(artifactPayload);
+              setActiveArtifact(artifactId);
+              const relatedArtifact: Artifact = { ...artifactPayload, id: artifactId };
+
+              setMessages(prev =>
+                prev.map(msg => {
+                  if (msg.id !== targetMessageId) {
+                    return msg;
+                  }
+                  const existing = msg.relatedArtifacts ?? [];
+                  return {
+                    ...msg,
+                    hasArtifact: true,
+                    relatedArtifacts: [...existing, relatedArtifact],
+                  };
+                })
+              );
+            } else {
+              // No corresponding tool message; fall back to standalone artifact message
+              addMessage({
+                text: `📎 **Artifact:** ${filename || 'Generated Artifact'}`,
+                isUser: false,
+                hasArtifact: true,
+                artifactType,
+                artifactContent,
+                artifactLanguage: language,
+                artifactFilename: filename,
+                artifactDownloadUrl: downloadUrl,
+                artifactPreviewType: previewType,
+                artifactSize: size,
+                artifactTruncated: truncated,
+                artifactMetadata: item,
+              });
+            }
           });
         }
       },
@@ -326,42 +428,61 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
     setExecutionStep(0);
     setCurrentView('home');
     setFileUploads([]);
+    toolStepCounter.current = 0;
+    toolStepMessageMap.current = {};
+    lastToolStepRef.current = 0;
 
     return newChatId;
   };
 
-  const addMessage = (messageData: Omit<Message, 'id' | 'timestamp'>) => {
-    const newMessage: Message = {
-      ...messageData,
-      id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      timestamp: new Date(),
-    };
-    setMessages(prev => [...prev, newMessage]);
-
-    if (newMessage.hasArtifact && newMessage.artifactContent) {
-      const artifactTitle = newMessage.artifactFilename ||
-        `${newMessage.artifactType || 'Code'} from message`;
-
-      const newArtifact: Artifact = {
-        id: `artifact-${Date.now()}`,
-        type: newMessage.artifactType || 'code',
-        title: artifactTitle,
-        content: newMessage.artifactContent,
-        language: newMessage.artifactLanguage,
-        filename: newMessage.artifactFilename,
-        messageId: newMessage.id,
-      };
-      addArtifact(newArtifact);
-      setActiveArtifact(newArtifact.id);
-    }
-  };
-
-  const addArtifact = (artifactData: Omit<Artifact, 'id'>) => {
+  const addArtifact = (artifactData: Omit<Artifact, 'id'>): string => {
     const newArtifact: Artifact = {
       ...artifactData,
       id: `artifact-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     };
     setArtifacts(prev => [...prev, newArtifact]);
+    return newArtifact.id;
+  };
+
+  const addMessage = (messageData: Omit<Message, 'id' | 'timestamp'>): string => {
+    const newMessageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const timestamp = new Date();
+    let relatedArtifacts: Artifact[] | undefined;
+
+    if (messageData.hasArtifact && messageData.artifactContent) {
+      const artifactTitle = messageData.artifactFilename ||
+        `${messageData.artifactType || 'Code'} from message`;
+      const artifactMeta = messageData.artifactMetadata as Record<string, unknown> | undefined;
+      const isLargeFlag = Boolean(artifactMeta?.['is_large'] ?? artifactMeta?.['isLarge']);
+
+      const artifactPayload: Omit<Artifact, 'id'> = {
+        type: messageData.artifactType || 'code',
+        title: artifactTitle,
+        content: messageData.artifactContent,
+        language: messageData.artifactLanguage,
+        filename: messageData.artifactFilename,
+        messageId: newMessageId,
+        downloadUrl: messageData.artifactDownloadUrl,
+        previewType: messageData.artifactPreviewType,
+        size: messageData.artifactSize,
+        truncated: messageData.artifactTruncated,
+        metadata: artifactMeta,
+        isLarge: isLargeFlag,
+      };
+      const artifactId = addArtifact(artifactPayload);
+      setActiveArtifact(artifactId);
+      relatedArtifacts = [{ ...artifactPayload, id: artifactId }];
+    }
+
+    const newMessage: Message = {
+      ...messageData,
+      id: newMessageId,
+      timestamp,
+      relatedArtifacts,
+    };
+
+    setMessages(prev => [...prev, newMessage]);
+    return newMessage.id;
   };
 
   const sendMessage = async (text: string, files: File[] = []) => {
@@ -533,6 +654,9 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
 
   const handleSetActiveChat = (chatId: string) => {
     setActiveChat(chatId);
+    toolStepCounter.current = 0;
+    toolStepMessageMap.current = {};
+    lastToolStepRef.current = 0;
 
     const existingChat = chats.find(chat => chat.id === chatId);
 

@@ -1,0 +1,13 @@
+[project]
+name = "narrative-agent"
+version = "0.1.0"
+description = "Narrative MCP server that composes business-ready storylines from artifacts."
+requires-python = ">=3.10"
+dependencies = [
+    "boto3>=1.40.40",
+    "mcp[cli]>=1.15.0",
+    "openai>=1.109.1",
+    "pydantic>=2.6.0",
+    "python-dotenv>=1.0.1",
+]
+

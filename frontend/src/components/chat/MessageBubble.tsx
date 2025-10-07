@@ -1,12 +1,12 @@
 // src/components/chat/MessageBubble.tsx
 import React from 'react';
 import styled, { keyframes } from 'styled-components';
-import { Code2, FileText, BarChart, ExternalLink, Copy, Check } from 'lucide-react';
+import { Code2, FileText, BarChart, ExternalLink, Copy, Check, Image as ImageIcon } from 'lucide-react';
 import type { Message } from '../../types/chat';
 
 interface MessageBubbleProps {
     message: Message;
-    onArtifactClick?: () => void;
+    onArtifactClick?: (artifactId?: string) => void;
 }
 
 const slideIn = keyframes`
@@ -363,6 +363,13 @@ const ArtifactAction = styled.div`
   color: rgba(255, 255, 255, 0.7);
 `;
 
+const RelatedArtifactsContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+`;
+
 const CodePreview = styled.pre`
   font-size: 11px;
   font-family: 'SF Mono', 'Monaco', 'Cascadia Code', 'Roboto Mono', monospace;
@@ -489,6 +496,8 @@ const getArtifactIcon = (type?: string) => {
             return <FileText size={14} />;
         case 'chart':
             return <BarChart size={14} />;
+        case 'image':
+            return <ImageIcon size={14} />;
         default:
             return <Code2 size={14} />;
     }
@@ -502,6 +511,8 @@ const getArtifactTitle = (type?: string) => {
             return 'Document';
         case 'chart':
             return 'Chart';
+        case 'image':
+            return 'Image';
         default:
             return 'Artifact';
     }
@@ -535,6 +546,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         }
     };
 
+    const relatedArtifacts = message.relatedArtifacts ?? [];
+    const supplementalArtifacts = message.artifactContent ? relatedArtifacts.slice(1) : relatedArtifacts;
+
     const getCodePreview = (content: string) => {
         const lines = content.split('\n');
         const preview = lines.slice(0, 3).join('\n');
@@ -561,7 +575,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                         dangerouslySetInnerHTML={{ __html: renderedMarkdown }}
                     />
                     {message.hasArtifact && message.artifactContent && (
-                        <ArtifactPreview onClick={onArtifactClick}>
+                        <ArtifactPreview onClick={() => onArtifactClick?.(relatedArtifacts[0]?.id)}>
                             <ArtifactHeader>
                                 <ArtifactIcon>
                                     {getArtifactIcon(message.artifactType)}
@@ -590,14 +604,45 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                                     Click to view document content
                                 </div>
                             )}
+
+                            {message.artifactType === 'image' && (
+                                <div style={{
+                                    fontSize: '11px',
+                                    color: 'rgba(255, 255, 255, 0.8)',
+                                    fontStyle: 'italic'
+                                }}>
+                                    Click to view image preview
+                                </div>
+                            )}
                         </ArtifactPreview>
+                    )}
+
+                    {supplementalArtifacts.length > 0 && (
+                        <RelatedArtifactsContainer>
+                            {supplementalArtifacts.map((artifact) => (
+                                <ArtifactPreview key={artifact.id} onClick={() => onArtifactClick?.(artifact.id)}>
+                                    <ArtifactHeader>
+                                        <ArtifactIcon>
+                                            {getArtifactIcon(artifact.type)}
+                                        </ArtifactIcon>
+                                        <ArtifactTitle>
+                                            {artifact.filename || artifact.title}
+                                        </ArtifactTitle>
+                                        <ArtifactAction>
+                                            <ExternalLink size={12} />
+                                            View
+                                        </ArtifactAction>
+                                    </ArtifactHeader>
+                                </ArtifactPreview>
+                            ))}
+                        </RelatedArtifactsContainer>
                     )}
 
                     <MessageTime $isUser={message.isUser}>
                         {formatTime(message.timestamp)}
                     </MessageTime>
                 </MessageBubbleContainer>
-                {message.hasArtifact && !message.isUser && (
+                {message.hasArtifact && message.artifactContent && !message.isUser && (
                     <>
                         <ActionButton
                             $isUser={message.isUser}

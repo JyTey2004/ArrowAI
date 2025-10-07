@@ -32,6 +32,8 @@ DEFAULT_BUCKET = os.environ.get("MCP_BUCKET", "arrowai")
 REGION = os.environ.get("AWS_REGION", "ap-southeast-1")
 CODE_AGENT_MCP_WS = os.environ.get("CODE_AGENT_MCP_WS", "http://localhost:5000/mcp/code_agent")
 RESEARCH_AGENT_MCP_WS = os.environ.get("RESEARCH_AGENT_MCP_WS", "http://localhost:5001/mcp/research_agent")
+ARTIFACT_AGENT_MCP_WS = os.environ.get("ARTIFACT_AGENT_MCP_WS", "http://localhost:5002/mcp/artifacts")
+NARRATIVE_AGENT_MCP_WS = os.environ.get("NARRATIVE_AGENT_MCP_WS", "http://localhost:5003/mcp/narrative_agent")
 
 s3c = S3Client(
     bucket_name=DEFAULT_BUCKET,
@@ -50,12 +52,13 @@ model = init_chat_model(
 _mcp_client: Optional[MultiServerMCPClient] = None
 _model_with_tools = None
 _tools = None
+_tool_metadata: Dict[str, Dict[str, Any]] = {}
 _tools_ready = asyncio.Lock()
 graph = None  
 
 
 async def _ensure_tools():
-    global _mcp_client, _model_with_tools, _tools
+    global _mcp_client, _model_with_tools, _tools, _tool_metadata
     async with _tools_ready:
         if _mcp_client is not None and _model_with_tools is not None and _tools is not None:
             return
@@ -69,11 +72,33 @@ async def _ensure_tools():
                     "url": RESEARCH_AGENT_MCP_WS,
                     "transport": "streamable_http",
                 },
+                "artifact_service": {
+                    "url": ARTIFACT_AGENT_MCP_WS,
+                    "transport": "streamable_http",
+                },
+                "narrative_agent": {
+                    "url": NARRATIVE_AGENT_MCP_WS,
+                    "transport": "streamable_http",
+                },
             }
         )
         _tools = await _mcp_client.get_tools()
 
         logger.info(f"Fetched {_tools} from MCP servers.")
+
+        _tool_metadata = {}
+        for tool in _tools:
+            name = getattr(tool, "name", None)
+            if not name:
+                continue
+            description = getattr(tool, "description", "") or ""
+            tool_meta = getattr(tool, "metadata", {}) or {}
+            args_schema = getattr(tool, "args_schema", None)
+            _tool_metadata[name] = {
+                "description": description,
+                "metadata": tool_meta,
+                "args_schema": args_schema,
+            }
 
         _model_with_tools = model.bind_tools(_tools)
         logger.info("MCP tools bound over WebSocket.")
@@ -105,6 +130,9 @@ def _append_cel(base_prefix: str, content: str) -> None:
 TEXT_PREVIEW_EXTS = {".txt", ".md", ".csv", ".tsv", ".json", ".log", ".py", ".ipynb", ".html", ".yaml", ".yml"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp"}
 
+TEXT_PREVIEW_MAX_BYTES = 50_000
+TEXT_PREVIEW_SLICE = 8_000
+
 def _prepare_artifact_preview(artifact: dict) -> dict:
     art = dict(artifact)
     uri = art.get("uri") or art.get("path") or ""
@@ -112,29 +140,69 @@ def _prepare_artifact_preview(artifact: dict) -> dict:
     if name:
         art["name"] = name
     ext = os.path.splitext(name or "")[1].lower()
+    size = art.get("size") or 0
 
+    art.setdefault("type", "document")
+    art.setdefault("preview_type", "link")
+    art.setdefault("content", "")
+    art.setdefault("truncated", False)
+    art.setdefault("is_large", False)
+
+    download_url = art.get("download_url")
     if uri.startswith("s3://"):
         try:
-            art["download_url"] = s3c.presigned_get(uri, expires_in=3600)
+            download_url = s3c.presigned_get(uri, expires_in=3600)
+            art["download_url"] = download_url
         except Exception as e:
             logger.warning(f"Failed to generate presigned URL for {uri}: {e}")
 
         if ext in TEXT_PREVIEW_EXTS:
-            size = art.get("size") or 0
-            if not size or size <= 200_000:
+            if size and size > TEXT_PREVIEW_MAX_BYTES:
+                art["is_large"] = True
+                message = (
+                    f"File is {size} bytes which exceeds the inline preview limit. "
+                    "Use the download link to view the full content."
+                )
+                if download_url:
+                    message += f"\n[Download the artifact]({download_url})"
+                art["content"] = message
+                art["preview_type"] = "link"
+            else:
                 try:
                     data, _ = s3c.get_bytes(uri)
                     preview = data.decode("utf-8", errors="replace")
-                    if len(preview) > 8000:
-                        preview = preview[:8000] + "\n... truncated ..."
+                    truncated = False
+                    if len(preview) > TEXT_PREVIEW_SLICE:
+                        preview = preview[:TEXT_PREVIEW_SLICE] + "\n… truncated …"
+                        truncated = True
                     art["content"] = preview
                     art["preview_type"] = "text"
-                    art.setdefault("type", "document")
+                    art["truncated"] = truncated
                 except Exception as e:
                     logger.warning(f"Failed to fetch text preview for {uri}: {e}")
+                    message = "Failed to fetch preview. Use the download link."
+                    if download_url:
+                        message += f"\n[Download the artifact]({download_url})"
+                    art["content"] = message
+                    art["preview_type"] = "link"
         elif ext in IMAGE_EXTS:
             art["preview_type"] = "image"
+            art["content"] = download_url
             art.setdefault("type", "image")
+        else:
+            message = "Preview not available for this file type."
+            if download_url:
+                message += f"\n[Download the artifact]({download_url})"
+            art["content"] = message
+            art["preview_type"] = "link"
+    else:
+        if not art.get("content"):
+            art["content"] = "Artifact available. Download to view."
+        if ext in TEXT_PREVIEW_EXTS:
+            art["preview_type"] = "text"
+
+    if isinstance(art.get("content"), bytes):
+        art["content"] = art["content"].decode("utf-8", errors="replace")
 
     return art
 
@@ -553,13 +621,34 @@ async def execute_node(state: MCPState, config: RunnableConfig):
         all_messages.append(resp)
 
         for tool_call in resp.tool_calls or []:
+            tool_name = tool_call.get("name")
             logger.info(f"Execute node for thread_id={thread_id}, step_idx={state.get('step_idx',0)} invoking tool call: {tool_call}")
             thought_payload = {
-                "tool": tool_call.get("name"),
+                "tool": tool_name,
                 "args": tool_call.get("args", {}),
             }
-            await emit({"event": "thought", "text": json.dumps(thought_payload, indent=2)})
-            await emit({"event": "sandbox.stdout", "text": f"Using tool:{tool_call.get('name')} with args {json.dumps(tool_call.get('args', {}), indent=2)}\n"})
+
+            tool_info = _tool_metadata.get(tool_name or "", {})
+            description = tool_info.get("description") or "No description provided."
+            raw_metadata = tool_info.get("metadata") or {}
+            if not isinstance(raw_metadata, dict):
+                raw_metadata = {}
+            try:
+                metadata = json.loads(json.dumps(raw_metadata, default=str))
+            except Exception:
+                metadata = {}
+            server_name = metadata.get("server") or metadata.get("mcp_server")
+
+            await emit({
+                "event": "tool.call",
+                "tool": tool_name,
+                "description": description,
+                "args": tool_call.get("args", {}),
+                "server": server_name,
+                "metadata": metadata,
+            })
+            await emit({"event": "thought", "text": f"Decided to use tool: {tool_name}"})
+            await emit({"event": "sandbox.stdout", "text": f"Using tool:{tool_name} with args {json.dumps(tool_call.get('args', {}), indent=2)}\n"})
 
         emitted_artifact_uris: set[str] = set()
         updated_tool_messages = [m for m in all_messages if isinstance(m, ToolMessage)]
@@ -591,9 +680,13 @@ async def execute_node(state: MCPState, config: RunnableConfig):
 
                 step_artifacts = step.get("artifacts") or []
                 if step_artifacts:
-                    enriched_step_artifacts = [_prepare_artifact_preview(art) for art in step_artifacts]
-                    for art in enriched_step_artifacts:
-                        uri = art.get("uri") or art.get("path")
+                    enriched_step_artifacts = []
+                    for artifact_item in step_artifacts:
+                        prepared = _prepare_artifact_preview(artifact_item)
+                        if step_id is not None:
+                            prepared["step"] = step_id
+                        enriched_step_artifacts.append(prepared)
+                        uri = prepared.get("uri") or prepared.get("path")
                         if uri:
                             emitted_artifact_uris.add(uri)
                     await emit({"event": "sandbox.artifacts", "items": enriched_step_artifacts})

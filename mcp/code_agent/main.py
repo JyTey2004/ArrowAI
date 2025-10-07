@@ -99,7 +99,7 @@ ENVIRONMENT & OUTPUT CONTRACT
     - OUTPUTS_DIR: absolute path string to the outputs directory
     - INPUTS_DIR: absolute path string to the inputs directory
 - When an artifact (file) is created under outputs/, immediately print its path on a line starting with EXACTLY:
-    ARTIFACT: outputs/<relative_path_inside_outputs>
+    ARTIFACT: outputs/<filename>
 (If you used OUTPUTS_DIR to save, still print the RELATIVE path prefixed with `outputs/…`.)
 - When printing required diagnostics, prefix each with the exact tag EVIDENCE: so they’re easy to parse:
     EVIDENCE: key=<name> value=<value_or_json>
@@ -130,7 +130,7 @@ EVAL_SYSTEM = (
     '  "verdict": "PASS" | "FAIL",\n'
     '  "output_summary": "A brief summary of the output, include key important information"\n'
     '  "artifacts": [ { "name": "file name", "description": "short description", "path": "s3://path/to/artifact" }, ... ]\n'
-    '  "code_artifact": { "name": "file name", "description": "short description" }\n'
+    '  "code_artifact": { "name": "file name", "description": "short description", "path": "s3://path/to/code_artifact" }\n'
     "}\n"
     "Rules:\n"
     "- Never invent columns or files.\n"
@@ -184,6 +184,7 @@ PLANNER_SYSTEM = (
     "  5. Provide a DETAILED and SPECIFIC description of the step to the coding agent.\n"
     "  6. DO NOT write code yourself. The coding agent will handle code generation and execution.\n"
     "  7. Try not to ask the coding agent to log too much unnecessary information, only what is needed to understand progress and debug issues.\n"
+    "  8. Always include the files to read/write and any other relevant details, from which folder, and to which folder.\n\n"
 
     "Guidelines:\n"
     "- Always choose only ONE next step. Break down complex tasks into smaller, manageable steps.\n"

@@ -19,6 +19,7 @@ export interface WebSocketCallbacks {
     onTodos?: (markdown: string, requiresFeedback?: boolean, source?: string) => void;
     onCode?: (text: string, filename?: string) => void;
     onThought?: (thought: string) => void;
+    onToolCall?: (payload: { tool?: string; description?: string; args?: Record<string, unknown>; server?: string | null; metadata?: Record<string, unknown> }) => void;
     onStatus?: (payload: Record<string, unknown>) => void;
     onStdout?: (text: string) => void;
     onStderr?: (text: string) => void;
@@ -137,6 +138,15 @@ export class AIWebSocketService {
                 break;
             case 'thought':
                 this.callbacks.onThought?.(data.text);
+                break;
+            case 'tool.call':
+                this.callbacks.onToolCall?.({
+                    tool: data.tool,
+                    description: data.description,
+                    args: data.args,
+                    server: data.server ?? null,
+                    metadata: data.metadata,
+                });
                 break;
             case 'sandbox.status':
                 this.callbacks.onStatus?.(data);

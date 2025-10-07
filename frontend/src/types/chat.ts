@@ -16,6 +16,13 @@ export interface Message {
     artifactContent?: string;
     artifactLanguage?: string;
     artifactFilename?: string;
+    artifactDownloadUrl?: string;
+    artifactPreviewType?: string;
+    artifactSize?: number;
+    artifactTruncated?: boolean;
+    artifactMetadata?: Record<string, unknown>;
+    toolStep?: number;
+    relatedArtifacts?: Artifact[];
     files?: AttachedFile[];
 }
 
@@ -36,6 +43,12 @@ export interface Artifact {
     language?: string;
     filename?: string;
     messageId?: string;
+    downloadUrl?: string;
+    previewType?: string;
+    size?: number;
+    truncated?: boolean;
+    metadata?: Record<string, unknown>;
+    isLarge?: boolean;
     createdAt?: Date;
     updatedAt?: Date;
 }
@@ -53,6 +66,7 @@ export interface WebSocketEventHandlers {
     onTodos?: (markdown: string, requiresFeedback?: boolean, source?: string) => void;
     onCode?: (text: string, filename?: string) => void;
     onThought?: (thought: string) => void;
+    onToolCall?: (payload: { tool?: string; description?: string; args?: Record<string, unknown>; server?: string | null; metadata?: Record<string, unknown> }) => void;
     onStatus?: (payload: Record<string, unknown>) => void;
     onStdout?: (text: string) => void;
     onStderr?: (text: string) => void;

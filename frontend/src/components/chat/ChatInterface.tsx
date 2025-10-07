@@ -754,7 +754,6 @@ export const ChatInterface: React.FC = () => {
                   {group.userMessage && (
                     <MessageBubble
                       message={group.userMessage}
-                      onArtifactClick={() => { }}
                     />
                   )}
 
@@ -778,7 +777,11 @@ export const ChatInterface: React.FC = () => {
                   {group.finalMessage && (
                     <MessageBubble
                       message={group.finalMessage}
-                      onArtifactClick={() => {
+                      onArtifactClick={(artifactId) => {
+                        if (artifactId) {
+                          setActiveArtifact(artifactId);
+                          return;
+                        }
                         if (group.finalMessage?.hasArtifact && group.finalMessage?.artifactContent) {
                           const existingArtifact = artifacts.find(a => a.messageId === group.finalMessage!.id);
                           if (existingArtifact) {

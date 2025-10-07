@@ -18,12 +18,27 @@
 
 ---
 
+## 2b. ArtifactService
+- **Role**: Retrieve artifacts stored on S3 and expose text previews to other agents.
+- **Tooling**:
+  - `fetch_artifact_text` MCP tool – accepts an `s3://` URI and returns decoded text or a presigned download URL for binary files.
+  - `understand_file` MCP tool – appends artifact insights to `ARTIFACTS.md`, falling back to the coding agent for large files.
+  - `ping` MCP tool – liveness check.
+- **Notes**:
+  - Defaults to the `MCP_BUCKET` bucket and truncates responses at ~32 KB (configurable).
+  - Binary formats return metadata plus a presigned link instead of raw bytes.
+
+---
+
 ## 3. NarrativeAgent (Writer)
 - **Role**: Turn research + analysis into a professional storyline.
-- **Tools**: Style guide, summarizer, outline → prose expander.
+- **Tooling**:
+  - `compose_narrative` MCP tool – ingests artifacts and returns narrative + executive summary markdown (optionally uploads to S3).
+  - `ping` MCP tool – liveness check.
 - **Outputs**:
   - `narrative.md` (main storyline)
-  - `exec_summary.md` (1–2 page executive brief)
+  - `executive_summary.md` (1–2 page executive brief)
+  - `talking_points.md` (optional quick-reference bullets)
 
 ---
 
