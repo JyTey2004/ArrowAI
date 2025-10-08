@@ -32,6 +32,7 @@ export interface WebSocketCallbacks {
     onFileUploadComplete?: (fileName: string) => void;
     onFileUploadError?: (error: string, fileName: string) => void;
     onTodoStatus?: (status: string) => void;
+    onCel?: (content: string) => void;
 }
 
 export interface FileUpload {
@@ -162,6 +163,9 @@ export class AIWebSocketService {
 
             case 'sandbox.artifacts':
                 this.callbacks.onArtifacts?.(data.items);
+                break;
+            case 'cel':
+                this.callbacks.onCel?.(typeof data.content === 'string' ? data.content : '');
                 break;
 
             case 'answer':

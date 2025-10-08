@@ -26,6 +26,7 @@ interface ChatContextType {
   artifacts: Artifact[];
   activeArtifact: string | null;
   setActiveArtifact: (artifactId: string | null) => void;
+  celArtifactId: string | null;
   addMessage: (message: Omit<Message, 'id' | 'timestamp'>) => string;
   addArtifact: (artifact: Omit<Artifact, 'id'>) => string;
   sendMessage: (text: string, files?: File[]) => Promise<void>;
@@ -65,6 +66,7 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [activeArtifact, setActiveArtifact] = useState<string | null>(null);
+  const [celArtifactId, setCelArtifactId] = useState<string | null>(null);
 
   const [isConnected, setIsConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
@@ -131,7 +133,7 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
             artifactContent: markdown,
           });
           addMessage({
-            text: '✋ **Review the TODO list.**\nType `/approve` to accept as-is, or send a revised markdown list in the chat to request changes.',
+            text: '✋ **Review the TODO list.**\nType `/approve` to accept as-is, or describe the changes you need and I will regenerate the plan automatically.',
             isUser: false,
           });
         } else {
@@ -376,6 +378,65 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
       onTodoStatus: (status) => {
         if (status === 'approved') {
           setAwaitingTodoFeedback(false);
+          setIsLoading(false);
+        } else if (status === 'updating') {
+          setIsLoading(true);
+          setAwaitingTodoFeedback(true);
+        }
+      },
+
+      onCel: (celContent) => {
+        let nextCelId = '';
+        const normalized = typeof celContent === 'string' ? celContent : '';
+
+        setArtifacts(prev => {
+          const existingIndex = prev.findIndex(artifact =>
+            (artifact.metadata && (artifact.metadata as Record<string, unknown>)?.isCel === true) ||
+            (artifact.filename && artifact.filename.toLowerCase() === 'cel.md')
+          );
+
+          if (!normalized && existingIndex === -1) {
+            return prev;
+          }
+
+          const baseFields: Omit<Artifact, 'id'> = {
+            type: 'document',
+            title: 'CEL.md',
+            content: normalized,
+            language: 'markdown',
+            filename: 'CEL.md',
+            previewType: 'text',
+            truncated: false,
+            metadata: { isCel: true },
+            size: normalized.length,
+          };
+
+          if (existingIndex >= 0) {
+            const existing = prev[existingIndex];
+            nextCelId = existing.id;
+            const updatedArtifact: Artifact = {
+              ...existing,
+              ...baseFields,
+              id: existing.id,
+              metadata: { ...(existing.metadata ?? {}), isCel: true },
+              size: normalized.length,
+            };
+
+            const next = [...prev];
+            next[existingIndex] = updatedArtifact;
+            return next;
+          }
+
+          nextCelId = `artifact-cel-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+          const celArtifact: Artifact = {
+            ...baseFields,
+            id: nextCelId,
+          };
+          return [...prev, celArtifact];
+        });
+
+        if (nextCelId) {
+          setCelArtifactId(nextCelId);
         }
       }
     });
@@ -428,6 +489,9 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
     setExecutionStep(0);
     setCurrentView('home');
     setFileUploads([]);
+    setArtifacts([]);
+    setActiveArtifact(null);
+    setCelArtifactId(null);
     toolStepCounter.current = 0;
     toolStepMessageMap.current = {};
     lastToolStepRef.current = 0;
@@ -436,12 +500,82 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
   };
 
   const addArtifact = (artifactData: Omit<Artifact, 'id'>): string => {
-    const newArtifact: Artifact = {
-      ...artifactData,
-      id: `artifact-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-    };
-    setArtifacts(prev => [...prev, newArtifact]);
-    return newArtifact.id;
+    let generatedId = '';
+
+    setArtifacts(prev => {
+      const fallbackText = 'Artifact available. Download to view.';
+      const isFallback =
+        !artifactData.content ||
+        artifactData.content.trim().length === 0 ||
+        artifactData.content.trim().startsWith(fallbackText);
+
+      let enrichedArtifact = { ...artifactData };
+
+      if (isFallback) {
+        const matching = prev.find(existing => {
+          const sameFilename = existing.filename && artifactData.filename
+            ? existing.filename === artifactData.filename
+            : false;
+          const sameTitle = existing.title === artifactData.title;
+          return (sameFilename || sameTitle) &&
+            existing.content &&
+            !existing.content.trim().startsWith(fallbackText);
+        });
+
+        if (matching) {
+          enrichedArtifact = {
+            ...enrichedArtifact,
+            content: matching.content,
+            language: enrichedArtifact.language ?? matching.language,
+            downloadUrl: enrichedArtifact.downloadUrl ?? matching.downloadUrl,
+            previewType: enrichedArtifact.previewType ?? matching.previewType,
+            truncated: enrichedArtifact.truncated ?? matching.truncated,
+            size: enrichedArtifact.size ?? matching.size,
+            isLarge: enrichedArtifact.isLarge ?? matching.isLarge,
+            metadata: { ...(matching.metadata ?? {}), ...(enrichedArtifact.metadata ?? {}) },
+          };
+        }
+      }
+
+      const duplicateIndex = prev.findIndex(existing => {
+        if (enrichedArtifact.messageId && existing.messageId === enrichedArtifact.messageId) {
+          if (enrichedArtifact.filename && existing.filename) {
+            return existing.filename === enrichedArtifact.filename;
+          }
+          if (enrichedArtifact.title) {
+            return existing.title === enrichedArtifact.title;
+          }
+        }
+        if (enrichedArtifact.downloadUrl && existing.downloadUrl) {
+          return enrichedArtifact.downloadUrl === existing.downloadUrl;
+        }
+        return false;
+      });
+
+      if (duplicateIndex >= 0) {
+        const existing = prev[duplicateIndex];
+        generatedId = existing.id;
+        const updatedArtifact: Artifact = {
+          ...existing,
+          ...enrichedArtifact,
+          id: existing.id,
+          metadata: { ...(existing.metadata ?? {}), ...(enrichedArtifact.metadata ?? {}) },
+        };
+
+        const next = [...prev];
+        next[duplicateIndex] = updatedArtifact;
+        return next;
+      }
+
+      const newArtifact: Artifact = {
+        ...enrichedArtifact,
+        id: `artifact-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      };
+      generatedId = newArtifact.id;
+      return [...prev, newArtifact];
+    });
+
+    return generatedId;
   };
 
   const addMessage = (messageData: Omit<Message, 'id' | 'timestamp'>): string => {
@@ -502,16 +636,20 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
 
       const approveCommand = '/approve';
       const isApprove = trimmedInput.toLowerCase().startsWith(approveCommand);
-      const comment = isApprove ? trimmedInput.slice(approveCommand.length).trim() : undefined;
+      const commentText = isApprove ? trimmedInput.slice(approveCommand.length).trim() : trimmedInput;
 
       if (isApprove && (!todos || todos.trim().length === 0)) {
         throw new Error('There is no TODO list to approve.');
       }
 
-      const updateMarkdown = isApprove ? todos ?? '' : text;
-      if (!isApprove && trimmedInput.length === 0) {
-        throw new Error('Provide updated TODO markdown before requesting changes.');
-      }
+      const looksLikeTodoMarkdown = (value: string) => {
+        const lines = value.trim().split('\n').filter(line => line.trim().length > 0);
+        if (lines.length === 0) return false;
+        const todoLines = lines.filter(line => /^(\s*[-*]\s+\[[ xX]\]|\s*\d+\.\s+|\s*[-*]\s+)/.test(line));
+        return todoLines.length >= Math.max(1, Math.ceil(lines.length * 0.5));
+      };
+
+      const feedbackMarkdown = !isApprove && looksLikeTodoMarkdown(trimmedInput) ? trimmedInput : undefined;
 
       addMessage({
         text,
@@ -524,8 +662,8 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
       try {
         await submitTodoFeedback({
           decision: isApprove ? 'approve' : 'update',
-          markdown: updateMarkdown,
-          comment,
+          markdown: isApprove ? (todos ?? '') : feedbackMarkdown,
+          comment: commentText || undefined,
         });
       } catch (error) {
         console.error('Failed to send TODO feedback:', error);
@@ -620,10 +758,12 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
     const trimmedComment = comment?.trim();
 
     if (decision === 'update') {
-      if (!trimmedMarkdown) {
-        throw new Error('Provide updated TODO markdown before requesting changes.');
+      if (!trimmedMarkdown && !trimmedComment) {
+        throw new Error('Provide feedback or updated TODO details before requesting changes.');
       }
-      setTodos(trimmedMarkdown);
+      if (trimmedMarkdown) {
+        setTodos(trimmedMarkdown);
+      }
     } else {
       setAwaitingTodoFeedback(false);
     }
@@ -700,6 +840,7 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
         artifacts,
         activeArtifact,
         setActiveArtifact,
+        celArtifactId,
         addArtifact,
         sendMessage,
         isConnected,

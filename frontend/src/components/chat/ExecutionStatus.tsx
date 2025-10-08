@@ -1,13 +1,27 @@
 // src/components/chat/ExecutionStatus.tsx
 import React from 'react';
 import styled from 'styled-components';
-import { ChevronDown, Play, CheckCircle, X, Code2, Terminal, AlertCircle } from 'lucide-react';
+import { ChevronDown, Play, CheckCircle, X, Code2, Terminal, AlertCircle, Wrench, Info } from 'lucide-react';
 import type { Message } from '../../types/chat';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+
+type StepKind =
+  | 'tool-call'
+  | 'status'
+  | 'stdout'
+  | 'stderr'
+  | 'code'
+  | 'todo'
+  | 'artifact'
+  | 'thought'
+  | 'other';
 
 interface ExecutionStep {
   id: string;
   message: Message;
   stepNumber: number;
+  kind: StepKind;
 }
 
 interface ExecutionStatusProps {
@@ -151,7 +165,7 @@ const ExecutionStep = styled.div<{ $isActive: boolean }>`
   }
 `;
 
-const StepIcon = styled.div<{ $status: 'pending' | 'running' | 'completed' | 'error' }>`
+const StepIcon = styled.div<{ $status: 'pending' | 'running' | 'completed' | 'error' | 'info' }>`
   width: 16px;
   height: 16px;
   border-radius: 50%;
@@ -178,6 +192,11 @@ const StepIcon = styled.div<{ $status: 'pending' | 'running' | 'completed' | 'er
         return `
           background: #ef4444;
           color: white;
+        `;
+      case 'info':
+        return `
+          background: ${props.theme.glassBorder};
+          color: ${props.theme.accent};
         `;
       default:
         return `
@@ -229,6 +248,37 @@ const StepContent = styled.div`
   }
 `;
 
+const StepMarkdown = styled.div`
+  font-size: 12px;
+  color: ${props => props.theme.textSecondary};
+  line-height: 1.45;
+  margin-top: 4px;
+
+  strong {
+    color: ${props => props.theme.textPrimary};
+  }
+
+  code {
+    background: ${props => props.theme.glassBackground};
+    border: 1px solid ${props => props.theme.glassBorder};
+    border-radius: 4px;
+    padding: 2px 4px;
+    font-family: 'SF Mono', 'Monaco', 'Cascadia Code', 'Roboto Mono', monospace;
+  }
+
+  pre {
+    font-size: 11px;
+    background: ${props => props.theme.glassBackground};
+    border: 1px solid ${props => props.theme.glassBorder};
+    border-radius: 4px;
+    padding: 8px;
+    overflow-x: auto;
+    color: ${props => props.theme.textPrimary};
+    margin-top: 8px;
+    line-height: 1.4;
+  }
+`;
+
 const StepTimestamp = styled.div`
   font-size: 10px;
   color: ${props => props.theme.textSecondary};
@@ -237,31 +287,66 @@ const StepTimestamp = styled.div`
 `;
 
 // Utility functions
-const getStepIcon = (message: Message) => {
-  if (message.text.includes('❌ **Error:**')) return <X size={10} />;
-  if (message.text.includes('✅ **Output:**')) return <CheckCircle size={10} />;
-  if (message.text.includes('💻 **Code Generated:**')) return <Code2 size={10} />;
-  if (message.text.includes('📋 **Todo List Generated:**')) return <Terminal size={10} />;
-  if (message.text.includes('📎 **Artifact')) return <Terminal size={10} />;
-  return <Terminal size={10} />;
+const getStepIcon = (step: ExecutionStep) => {
+  switch (step.kind) {
+    case 'tool-call':
+      return <Wrench size={10} />;
+    case 'status':
+      return <Info size={10} />;
+    case 'stdout':
+      return <CheckCircle size={10} />;
+    case 'stderr':
+      return <X size={10} />;
+    case 'code':
+      return <Code2 size={10} />;
+    case 'todo':
+    case 'artifact':
+    case 'thought':
+      return <Terminal size={10} />;
+    default:
+      if (step.message.text.includes('❌ **Error:**')) return <X size={10} />;
+      if (step.message.text.includes('✅ **Output:**')) return <CheckCircle size={10} />;
+      return <Terminal size={10} />;
+  }
 };
 
-const getStepStatus = (message: Message): 'completed' | 'error' => {
-  return message.text.includes('❌ **Error:**') ? 'error' : 'completed';
+const getStepStatus = (step: ExecutionStep): 'pending' | 'running' | 'completed' | 'error' | 'info' => {
+  if (step.kind === 'tool-call') return 'info';
+  if (step.kind === 'stderr') return 'error';
+  if (step.kind === 'status' && step.message.text.toLowerCase().includes('error')) {
+    return 'error';
+  }
+  if (step.message.text.includes('❌ **Error:**')) return 'error';
+  return 'completed';
 };
 
-const getStepTitle = (message: Message, stepNumber: number): string => {
-  if (message.text.includes('✅ **Output:**')) return `Step ${stepNumber}: Command Output`;
-  if (message.text.includes('❌ **Error:**')) return `Step ${stepNumber}: Error Occurred`;
-  if (message.text.includes('💻 **Code Generated:**')) return `Step ${stepNumber}: Code Generated`;
-  if (message.text.includes('📋 **Todo List Generated:**')) return `Step ${stepNumber}: Todo List Created`;
-  if (message.text.includes('📎 **Artifact')) return `Step ${stepNumber}: Artifact Created`;
+const getStepTitle = (step: ExecutionStep): string => {
+  const { message, stepNumber, kind } = step;
+  if (kind === 'tool-call') {
+    const explicitStep = typeof message.toolStep === 'number' ? message.toolStep : stepNumber;
+    const toolMatch = message.text.match(/\*\*(.*?)\*\*/);
+    const toolName = toolMatch ? toolMatch[1] : '';
+    return `Tool Call • Step ${explicitStep}${toolName ? ` – ${toolName}` : ''}`;
+  }
+  if (kind === 'status') {
+    return message.text.split('\n')[0].replace('🚧 ', '') || `Step ${stepNumber}: Status Update`;
+  }
+  if (kind === 'stdout') return `Step ${stepNumber}: Command Output`;
+  if (kind === 'stderr') return `Step ${stepNumber}: Error Output`;
+  if (kind === 'code') return `Step ${stepNumber}: Code Generated`;
+  if (kind === 'todo') return `Step ${stepNumber}: TODO Update`;
+  if (kind === 'artifact') return `Step ${stepNumber}: Artifact Created`;
+  if (kind === 'thought') return `Step ${stepNumber}: Thought`;
   return `Step ${stepNumber}: Process Step`;
 };
 
-const getStepDescription = (message: Message): string => {
+const getStepDescription = (step: ExecutionStep): string | null => {
+  if (step.kind === 'tool-call' || step.kind === 'thought') {
+    return null;
+  }
+
   // Remove markdown formatting and get first line
-  const cleanText = message.text
+  const cleanText = step.message.text
     .replace(/[✅❌💻📋📎]\s\*\*[^*]+\*\*:\s?/g, '')
     .replace(/\n/g, ' ')
     .replace(/```[\s\S]*?```/g, '[code block]')
@@ -294,7 +379,7 @@ const extractCodeBlock = (message: Message): string | null => {
 const getOverallStatus = (steps: ExecutionStep[], isRunning: boolean): 'running' | 'completed' | 'error' => {
   if (isRunning) return 'running';
 
-  const hasErrors = steps.some(step => getStepStatus(step.message) === 'error');
+  const hasErrors = steps.some(step => getStepStatus(step) === 'error');
   return hasErrors ? 'error' : 'completed';
 };
 
@@ -359,20 +444,35 @@ export const ExecutionStatus: React.FC<ExecutionStatusProps> = ({
       </ExecutionHeader>
 
       <ExecutionSteps $isExpanded={isExpanded}>
-        {steps.map((step) => {
+        {steps.map((step, index) => {
           const codeBlock = extractCodeBlock(step.message);
-          const status = getStepStatus(step.message);
+          const status = getStepStatus(step);
+          const description = getStepDescription(step);
+          const shouldRenderMarkdown = step.kind === 'tool-call' || step.kind === 'thought';
 
           return (
-            <ExecutionStep key={step.id} $isActive={false}>
+            <ExecutionStep
+              key={step.id}
+              $isActive={isRunning && index === steps.length - 1}
+            >
               <StepIcon $status={status}>
-                {getStepIcon(step.message)}
+                {getStepIcon(step)}
               </StepIcon>
               <StepContent>
-                <h5>{getStepTitle(step.message, step.stepNumber)}</h5>
-                <p>{getStepDescription(step.message)}</p>
-                {codeBlock && (
-                  <pre>{codeBlock.length > 500 ? codeBlock.substring(0, 500) + '\n...' : codeBlock}</pre>
+                <h5>{getStepTitle(step)}</h5>
+                {shouldRenderMarkdown ? (
+                  <StepMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {step.message.text}
+                    </ReactMarkdown>
+                  </StepMarkdown>
+                ) : (
+                  <>
+                    {description && <p>{description}</p>}
+                    {codeBlock && (
+                      <pre>{codeBlock.length > 500 ? codeBlock.substring(0, 500) + '\n...' : codeBlock}</pre>
+                    )}
+                  </>
                 )}
                 <StepTimestamp>
                   {formatTimestamp(step.message.timestamp)}

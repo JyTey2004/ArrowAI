@@ -42,7 +42,7 @@
 
 ---
 
-## 4. SlideCraftAgent (Presentation Builder)
+## 4. PresentationAgent (Presentation Builder)
 - **Role**: Transform narrative + figures into polished slides.
 - **Tools**: Deck generator (PPTX/Google Slides), chart inserter, brand/theme assets.
 - **Outputs**:

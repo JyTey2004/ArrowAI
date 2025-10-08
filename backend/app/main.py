@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  
 setup_logging() 
-
+    
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

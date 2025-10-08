@@ -1,7 +1,7 @@
 // src/components/chat/ChatInterface.tsx
 import React, { useState, useRef, useEffect } from 'react';
 import styled from 'styled-components';
-import { Send, Code2, FileText, BarChart, Maximize2, Minimize2, AlertCircle, Paperclip, X } from 'lucide-react';
+import { Send, Code2, FileText, BarChart, Maximize2, Minimize2, AlertCircle, Paperclip, X, BookOpen } from 'lucide-react';
 import { useChat } from '../../contexts/ChatContext';
 import { MessageBubble } from './MessageBubble';
 import { ArtifactPanel } from './ArtifactPanel';
@@ -233,7 +233,7 @@ const InputSection = styled.div`
 const TextInput = styled.textarea`
   width: 100%;
   min-height: 44px;
-  max-height: 120px;
+  max-height: 50vh;
   padding: 12px 16px;
   border: 1px solid ${props => props.theme.glassBorder};
   border-radius: 12px;
@@ -243,6 +243,7 @@ const TextInput = styled.textarea`
   font-family: inherit;
   line-height: 1.5;
   resize: none;
+  overflow-y: auto;
   outline: none;
   transition: all 0.2s ease;
   
@@ -397,6 +398,7 @@ export const ChatInterface: React.FC = () => {
     activeArtifact,
     setActiveArtifact,
     artifacts,
+    celArtifactId,
     sendMessage,
     isConnected,
     connectionStatus,
@@ -423,6 +425,18 @@ export const ChatInterface: React.FC = () => {
   const activeChatData = chats.find(chat => chat.id === activeChat);
   const hasArtifact = activeArtifact !== null;
   const currentArtifact = artifacts.find(a => a.id === activeArtifact);
+  const celArtifact = React.useMemo(() => {
+    if (celArtifactId) {
+      const found = artifacts.find(a => a.id === celArtifactId);
+      if (found) {
+        return found;
+      }
+    }
+    return artifacts.find(a => {
+      const name = (a.filename || a.title || '').toLowerCase();
+      return name === 'cel.md' || name.endsWith('/cel.md');
+    }) || null;
+  }, [artifacts, celArtifactId]);
 
   useEffect(() => {
     if (artifacts.length === 0) {
@@ -454,6 +468,45 @@ export const ChatInterface: React.FC = () => {
   }, [clarificationQuestion, addMessage, pendingClarification]);
 
   // Group messages into execution groups with real-time execution steps
+  type ExecutionStepKind =
+    | 'tool-call'
+    | 'status'
+    | 'stdout'
+    | 'stderr'
+    | 'code'
+    | 'todo'
+    | 'artifact'
+    | 'thought'
+    | 'other';
+
+  const getExecutionStepKind = (message: typeof messages[number]): ExecutionStepKind => {
+    if (typeof message.toolStep === 'number' || message.text.startsWith('🛠️ **Tool Call')) {
+      return 'tool-call';
+    }
+    if (message.text.includes('🚧 **Step')) {
+      return 'status';
+    }
+    if (message.text.includes('✅ **Output:**')) {
+      return 'stdout';
+    }
+    if (message.text.includes('❌ **Error:**')) {
+      return 'stderr';
+    }
+    if (message.text.includes('💻 **Code Generated:**')) {
+      return 'code';
+    }
+    if (message.text.includes('📋 **Todo List')) {
+      return 'todo';
+    }
+    if (message.text.includes('📎 **Artifact')) {
+      return 'artifact';
+    }
+    if (message.text.includes('🤔 **Thought')) {
+      return 'thought';
+    }
+    return 'other';
+  };
+
   const groupedMessages = React.useMemo(() => {
     type ChatMessage = typeof messages[number];
     type ArtifactItem = typeof artifacts[number];
@@ -491,7 +544,9 @@ export const ChatInterface: React.FC = () => {
           isActive: false,
         };
       } else if (currentGroup.id) {
-        const isExecutionStep = message.text.includes('✅ **Output:**') ||
+        const isExecutionStep = typeof message.toolStep === 'number' ||
+          message.text.includes('🛠️ **Tool Call') ||
+          message.text.includes('✅ **Output:**') ||
           message.text.includes('❌ **Error:**') ||
           message.text.includes('💻 **Code Generated:**') ||
           message.text.includes('📋 **Todo List Generated:**') ||
@@ -693,6 +748,18 @@ export const ChatInterface: React.FC = () => {
             </ChatTitle>
 
             <ChatActions>
+              {celArtifact && (
+                <ActionButton
+                  onClick={() => {
+                    setActiveArtifact(celArtifact.id);
+                    setIsArtifactExpanded(false);
+                  }}
+                  $isActive={activeArtifact === celArtifact.id}
+                  title="View CEL.md (thought process)"
+                >
+                  <BookOpen size={16} />
+                </ActionButton>
+              )}
               {hasArtifact && (
                 <>
                   <ActionButton
@@ -764,7 +831,8 @@ export const ChatInterface: React.FC = () => {
                       steps={group.executionSteps.map((step, index) => ({
                         id: step.id,
                         message: step,
-                        stepNumber: index + 1
+                        stepNumber: index + 1,
+                        kind: getExecutionStepKind(step)
                       }))}
                       isExpanded={expandedExecutions.has(group.id)}
                       onToggle={toggleExecutionExpanded}

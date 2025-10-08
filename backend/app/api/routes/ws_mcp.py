@@ -122,10 +122,11 @@ def _read_cel(base_prefix: str) -> str:
         return ""
 
 
-def _append_cel(base_prefix: str, content: str) -> None:
+def _append_cel(base_prefix: str, content: str) -> str:
     prev = _read_cel(base_prefix)
     new = prev + f"\n{content.strip()}\n"
     s3c.put_bytes(key=_cel_key(base_prefix), data=new.encode("utf-8"), content_type="text/markdown")
+    return new
 
 TEXT_PREVIEW_EXTS = {".txt", ".md", ".csv", ".tsv", ".json", ".log", ".py", ".ipynb", ".html", ".yaml", ".yml"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp"}
@@ -284,6 +285,8 @@ EXECUTE_SYSTEM = (
     "You have access to the following tools:\n"
     "- Code Agent: Completes task that requires code execution.\n"
     "- Research Agent: Completes tasks that require web search and information gathering.\n"
+    "- Artifact Agent: Understands and manages artifacts (files, documents, etc.) produced during execution.\n"
+    "- Narrative Agent: Crafts narratives, reports, and presentations based on gathered information and artifacts.\n\n"
     "Your goal is to complete the user's request by using these tools effectively.\n"
     "Start by understanding the complete situation before proposing solutions, ask follow up questions if you do not understand.\n"
     
@@ -292,9 +295,10 @@ EXECUTE_SYSTEM = (
     "  2. Gather any necessary information or resources to support this step.\n"
     "  3. Choose the MOST APPROPRIATE tool to execute this step.\n"
     "  4. Provide the most DETAILED and SPECIFIC description of this step to the tool schema.\n"
+    "  5. Output MUST contain a single tool call with the chosen tool and its arguments, unless the task is complete.\n"
     
     "Guidelines:\n"
-    "- When multple tools are possible, choose the one that is most likely to succeed and is the most efficient.\n"
+    "- When multiple tools are possible, choose the one that is most likely to succeed and is the most efficient.\n"
     "- All tool calls are synchronous. If you call the same tool multiple times in parallel, be aware of potential race conditions. For example, if you output 2 tool calls for code execution, they will run independently and give outputs in an unpredictable order.\n"
     "- You should call and execute code once per output. Do not make multiple code call tool calls unless they are completely independent.\n"
     "- If step requires other files, assume they are in S3 and can be read from there, hence theres no need to mention downloading/uploading.\n"
@@ -394,8 +398,17 @@ async def clarify_node(state: MCPState, config: RunnableConfig):
         
         emit({"event": "node", "name": "clarify"})
 
-        if state.get("resume_from") == "execute":
+        resume_target = state.get("resume_from")
+
+        if resume_target == "execute":
             logger.info(f"Clarify node for thread_id={thread_id} skipping clarification to resume execution.")
+            state["resume_from"] = None
+            return {
+                "need_clarification": False,
+                "clarifying_question": None,
+            }
+        if resume_target == "todo":
+            logger.info(f"Clarify node for thread_id={thread_id} resuming directly at TODO generation.")
             state["resume_from"] = None
             return {
                 "need_clarification": False,
@@ -434,7 +447,8 @@ async def clarify_node(state: MCPState, config: RunnableConfig):
 
 
         # No clarification: log and proceed
-        _append_cel(base_prefix, message)
+        cel_text = _append_cel(base_prefix, message)
+        emit({"event": "cel", "content": cel_text})
 
         
         if need:
@@ -484,7 +498,8 @@ async def todo_node(state: MCPState, config: RunnableConfig):
         # Only log when user accepts the todo
         if state.get("awaiting_todo_feedback"):
             state["resume_from"] = "execute"
-            _append_cel(base_prefix, todo_message)
+            cel_text = _append_cel(base_prefix, todo_message)
+            emit({"event": "cel", "content": cel_text})
 
         return {
             "todo": todo_md,
@@ -777,6 +792,7 @@ def route_after_clarify(state: MCPState) -> Literal["todo", "reply", "execute"]:
 
 async def route_after_execute(state: MCPState, config: RunnableConfig) -> Literal["tools", "reply"]:
     try:
+        emit = config["configurable"]["emit"]
         if state.get("done"):
             return "reply"
         
@@ -790,15 +806,16 @@ async def route_after_execute(state: MCPState, config: RunnableConfig) -> Litera
             if last_message.tool_calls: 
                 return "tools"
         
-        # If tools were called (step_idx > 0) we append the context_summary to CEL.md
-        if state.get("step_idx", 0) > 0:
-            exec_ctx = config["configurable"]["exec_ctx"]
-            base_prefix = exec_ctx["base_prefix"]
-            context_summary = state.get("context_summary") or ""
-            if context_summary:
-                _append_cel(base_prefix, f"## Execution Summary:\n{context_summary}\n")
-                logger.info(f"Route after execute appended context summary to CEL.md for thread_id={config['configurable']['thread_id']}, step_idx={state.get('step_idx',0)}:\n{context_summary}\n--- end summary ---\n\n")
         
+        # If no tool calls, we assume done
+        exec_ctx = config["configurable"]["exec_ctx"]
+        base_prefix = exec_ctx["base_prefix"]
+        context_summary = state.get("context_summary") or ""
+        if context_summary:
+            cel_text = _append_cel(base_prefix, f"## Execution Summary:\n{context_summary}\n")
+            emit({"event": "cel", "content": cel_text})
+            logger.info(f"Route after execute appended context summary to CEL.md for thread_id={config['configurable']['thread_id']}, step_idx={state.get('step_idx',0)}:\n{context_summary}\n--- end summary ---\n\n")
+    
         return "reply"
 
     except Exception as e:
@@ -912,6 +929,9 @@ async def ws_mcp_graph(
             artifacts=[],
         )
         
+        initial_cel = _read_cel(base_prefix)
+        emitter({"event": "cel", "content": initial_cel})
+        
         while True:
             raw = await ws.receive_text()
             try:
@@ -967,26 +987,51 @@ async def ws_mcp_graph(
                     await ws.send_json({"event": "error", "detail": "decision must be 'approve' or 'update'."})
                     continue
 
-                if decision == "update" and not updated_markdown:
-                    await ws.send_json({"event": "error", "detail": "Provide updated TODO markdown when requesting changes."})
-                    continue
-
                 if decision == "update":
-                    state["todo"] = updated_markdown
-                    state["messages"].append(HumanMessage(content=f"User updated TODO plan:\n{updated_markdown}"))
-                    _append_cel(base_prefix, f"## User Updated TODO:\n{updated_markdown}\n")
+                    if not updated_markdown and not comment:
+                        await ws.send_json({"event": "error", "detail": "Provide feedback or TODO guidance when requesting changes."})
+                        continue
+
+                    feedback_messages: list[str] = []
+
+                    if updated_markdown:
+                        state["todo"] = updated_markdown
+                        feedback_messages.append(f"User provided TODO draft:\n{updated_markdown}")
+                        cel_text = _append_cel(base_prefix, f"## User Updated TODO:\n{updated_markdown}\n")
+                        emitter({"event": "cel", "content": cel_text})
+
                     if comment:
-                        state["messages"].append(HumanMessage(content=f"User comment on TODO update: {comment}"))
-                        _append_cel(base_prefix, f"## TODO Update Comment:\n{comment}\n")
-                    await ws.send_json({"event": "todos", "markdown": updated_markdown, "requires_feedback": True, "source": "user"})
-                    logger.info(f"WS MCP graph thread_id={tid} received user TODO update.")
+                        feedback_messages.append(f"User feedback on TODO plan:\n{comment}")
+                        cel_text = _append_cel(base_prefix, f"## TODO Update Comment:\n{comment}\n")
+                        emitter({"event": "cel", "content": cel_text})
+
+                    if feedback_messages:
+                        state["messages"].append(HumanMessage(content="\n\n".join(feedback_messages)))
+
+                    state["awaiting_todo_feedback"] = False
+                    state["resume_from"] = "todo"
+
+                    await ws.send_json({"event": "todos.status", "status": "updating"})
+                    logger.info(f"WS MCP graph thread_id={tid} received TODO feedback; regenerating plan.")
+
+                    try:
+                        result = await graph.ainvoke(state, config=config)
+                        logger.info(f"WS MCP graph thread_id={tid} regenerated TODO after feedback: {result}")
+                        if result is not None:
+                            state = MCPState(result)
+                    except Exception:
+                        logger.exception("Failed to regenerate TODO after user feedback")
+                        await ws.send_json({"event": "error", "detail": "Failed to regenerate TODO plan."})
+                        state["awaiting_todo_feedback"] = True
+                        state["resume_from"] = None
                     continue
 
                 # decision == approve
                 approved_markdown = updated_markdown or state.get("todo") or ""
                 if approved_markdown:
                     state["todo"] = approved_markdown
-                    _append_cel(base_prefix, f"## Approved TODO:\n{approved_markdown}\n")
+                    cel_text = _append_cel(base_prefix, f"## Approved TODO:\n{approved_markdown}\n")
+                    emitter({"event": "cel", "content": cel_text})
 
                 approval_message = "User approved the TODO plan."
                 if comment:
@@ -996,7 +1041,8 @@ async def ws_mcp_graph(
                 state["resume_from"] = "execute"
                 state["messages"].append(HumanMessage(content=approval_message))
                 if comment:
-                    _append_cel(base_prefix, f"## TODO Approval Comment:\n{comment}\n")
+                    cel_text = _append_cel(base_prefix, f"## TODO Approval Comment:\n{comment}\n")
+                    emitter({"event": "cel", "content": cel_text})
 
                 if approved_markdown:
                     await ws.send_json({"event": "todos", "markdown": approved_markdown, "requires_feedback": False, "source": "approved"})

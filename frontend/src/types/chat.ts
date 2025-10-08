@@ -79,4 +79,5 @@ export interface WebSocketEventHandlers {
     onFileUploadComplete?: (fileName: string) => void;
     onFileUploadError?: (error: string, fileName: string) => void;
     onTodoStatus?: (status: string) => void;
+    onCel?: (content: string) => void;
 }
