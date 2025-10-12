@@ -82,13 +82,17 @@ ANALYZE_SYSTEM = (
     "- Questions must be specific, answerable with web research, and mutually complementary (no duplicates).\n"
     "- Each question should reflect evidence gaps surfaced in RESEARCH_LOG and move the investigation forward.\n"
     "- Keep values single-line (no embedded newlines).\n"
-    "- The total output for all questions must not exceed 240 characters. (Keep it short but impactful)\n"
     "- If context is insufficient, still propose well-structured exploratory questions.\n"
     "- All questions will be used as-is for web searches; avoid typos and ensure clarity.\n"
     "- If you do not understand the user goal and data, you may search for clarifying questions instead. (e.g. \"What is X?\")\n"
     "\n"
     "Example output (do NOT include comments):\n"
     "{\"rationale\": \"Why these questions matter...\", \"questions\": [\"Question 1\", \"Question 2\", \"Question 3\"]}"
+    
+    "Guidelines:\n"
+    "- All questions combined should not exceed 240 characters.\n"
+    "- Do not reference specific files or artifacts in questions, as the internet search tool cannot access them.\n"
+    "- If your questions depend on specific data points, rephrase them to be answerable without that context.\n"   
 )
 
 ANALYSIS_SYSTEM = (

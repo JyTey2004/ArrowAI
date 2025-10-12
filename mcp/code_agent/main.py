@@ -123,7 +123,7 @@ STYLE & SAFETY
 
 EVAL_SYSTEM = (
     "You evaluate and summarize code runs.\n"
-    "Inputs (JSON): {task, stdout, stderr, code, files_out}\n"
+    "Inputs (JSON): {task, stdout, stderr, code, all_files}\n"
     "Return ONE JSON object ONLY:\n"
     "{\n"
     '  "eval": "short reason (1-2 sentences)",\n'
@@ -136,6 +136,7 @@ EVAL_SYSTEM = (
     "- Never invent columns or files.\n"
     "- Prefer concrete facts from stdout.\n"
     "- If stderr is non-empty, verdict is usually FAIL unless stdout clearly fulfilled the task."
+    "- Add only relevant artifacts created in this run to the artifacts array. Return artifacts that the user expects to find. Output all pptx files found in outputs/.\n"
 )
 
 ARTIFACT_SYSTEM = (
@@ -146,6 +147,7 @@ ARTIFACT_SYSTEM = (
     "Output only bullet points and nothing else."
     f"You should provide the summary such that any coding agent can read this summary and understand the file and perform analysis/operations on it. "
     f"Provide the summary in a markdown bullet list without quotes. Include the artifact file path in the summary."
+    "If the file path is s3://bucket/key, include whether it is in inputs/ or outputs/."
     f"In the summary, include column names and what do they represent. "
 )
 
@@ -185,6 +187,7 @@ PLANNER_SYSTEM = (
     "  6. DO NOT write code yourself. The coding agent will handle code generation and execution.\n"
     "  7. Try not to ask the coding agent to log too much unnecessary information, only what is needed to understand progress and debug issues.\n"
     "  8. Always include the files to read/write and any other relevant details, from which folder, and to which folder.\n\n"
+    "  9. When asking the agent to use/create files, always state the file's path, e.g. 'inputs/data.csv' or 'outputs/result.csv'.\n"
 
     "Guidelines:\n"
     "- Always choose only ONE next step. Break down complex tasks into smaller, manageable steps.\n"
@@ -400,7 +403,7 @@ async def code_orchestrate(
                         # replace existing entry (e.g. to update size)
                         idx = aggregated_files_out.index(file_obj)
                         aggregated_files_out[idx] = file_obj
-            
+                        new_files_out.append(file_obj)
             
             curr_code = res.code or {}
             if curr_code:

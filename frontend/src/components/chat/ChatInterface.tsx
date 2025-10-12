@@ -153,53 +153,6 @@ const FinalMessageContainer = styled.div`
   gap: 12px;
 `;
 
-const ArtifactsList = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-`;
-
-const ArtifactPreview = styled.div`
-  background: ${props => props.theme.glassBackground};
-  border: 1px solid ${props => props.theme.glassBorder};
-  border-radius: 8px;
-  padding: 12px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  
-  &:hover {
-    background: ${props => props.theme.glassHover};
-    border-color: ${props => props.theme.accent}60;
-    transform: translateY(-1px);
-  }
-`;
-
-const ArtifactHeader = styled.div`
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-`;
-
-const ArtifactIcon = styled.div`
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: ${props => props.theme.accent};
-`;
-
-const ArtifactTitle = styled.div`
-  font-size: 13px;
-  font-weight: 600;
-  color: ${props => props.theme.textPrimary};
-  flex: 1;
-`;
-
-const ArtifactMeta = styled.div`
-  font-size: 11px;
-  color: ${props => props.theme.textSecondary};
-`;
-
 const InputContainer = styled.div`
   padding: 20px 24px;
   border-top: 1px solid ${props => props.theme.glassBorder};
@@ -729,15 +682,6 @@ export const ChatInterface: React.FC = () => {
     return 'Type your message here... (Shift+Enter for new line)';
   };
 
-  const getArtifactIcon = (type: string) => {
-    switch (type) {
-      case 'code': return <Code2 size={16} />;
-      case 'document': return <FileText size={16} />;
-      case 'chart': return <BarChart size={16} />;
-      default: return <Code2 size={16} />;
-    }
-  };
-
   return (
     <ChatContainer $hasArtifact={hasArtifact && !isArtifactExpanded}>
       <ChatPanel $hasArtifact={hasArtifact && !isArtifactExpanded}>
@@ -834,8 +778,10 @@ export const ChatInterface: React.FC = () => {
                         stepNumber: index + 1,
                         kind: getExecutionStepKind(step)
                       }))}
+                      artifacts={group.artifacts}
                       isExpanded={expandedExecutions.has(group.id)}
                       onToggle={toggleExecutionExpanded}
+                      onArtifactClick={(artifactId) => setActiveArtifact(artifactId)}
                       currentNode={currentNode}
                       isRunning={(isLoading && group.isActive) || (group.isActive && !group.finalMessage)}
                     />
@@ -860,29 +806,6 @@ export const ChatInterface: React.FC = () => {
                     />
                   )}
 
-                  {/* Artifacts List */}
-                  {group.artifacts.length > 0 && (
-                    <ArtifactsList>
-                      {group.artifacts.map((artifact) => (
-                        <ArtifactPreview
-                          key={artifact.id}
-                          onClick={() => setActiveArtifact(artifact.id)}
-                        >
-                          <ArtifactHeader>
-                            <ArtifactIcon>
-                              {getArtifactIcon(artifact.type)}
-                            </ArtifactIcon>
-                            <ArtifactTitle>
-                              {artifact.filename || artifact.title}
-                            </ArtifactTitle>
-                            <ArtifactMeta>
-                              {artifact.language || artifact.type}
-                            </ArtifactMeta>
-                          </ArtifactHeader>
-                        </ArtifactPreview>
-                      ))}
-                    </ArtifactsList>
-                  )}
                 </FinalMessageContainer>
               ))}
 

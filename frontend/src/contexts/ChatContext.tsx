@@ -174,24 +174,36 @@ export const ChatContextProvider: React.FC<ChatContextProviderProps> = ({
         });
       },
 
-      onToolCall: ({ tool, description, args, server }) => {
+      onToolCall: ({ text, tool, description, args, server }) => {
         const step = toolStepCounter.current + 1;
         toolStepCounter.current = step;
         lastToolStepRef.current = step;
 
         const lines: string[] = [];
-        const toolLabel = tool ? `**${tool}**` : 'Unknown tool';
-        const serverTag = server ? ` _(via ${server})_` : '';
-        lines.push(`🛠️ **Tool Call (Step ${step}):** ${toolLabel}${serverTag}`);
-        if (description) {
-          lines.push(description);
+        const headerParts: string[] = [`🛠️ **Tool Call (Step ${step})**`];
+        if (tool) {
+          headerParts[0] += `: **${tool}**`;
         }
-        if (args && Object.keys(args).length > 0) {
+        if (server) {
+          headerParts[0] += ` _(via ${server})_`;
+        }
+        lines.push(headerParts[0]);
+
+        const rawText = typeof text === 'string' ? text : '';
+        if (rawText.trim()) {
           lines.push('');
-          lines.push('**Arguments:**');
-          lines.push('```json');
-          lines.push(JSON.stringify(args, null, 2));
-          lines.push('```');
+          lines.push(rawText);
+        } else {
+          if (description) {
+            lines.push(description);
+          }
+          if (args && Object.keys(args).length > 0) {
+            lines.push('');
+            lines.push('**Arguments:**');
+            lines.push('```json');
+            lines.push(JSON.stringify(args, null, 2));
+            lines.push('```');
+          }
         }
 
         const messageId = addMessage({

@@ -65,13 +65,15 @@ class ArtifactsAnalyzer:
         else:
             return ""
 
-    def analyze_prompt(self, user_goal: str, filename: str, description: str, s3_presign_url: str, s3_file_type: str):
+    def analyze_prompt(self, user_goal: str, filename: str, description: str, s3_presign_url: str, s3_file_type: str, s3_file_path: str):
         base_prompt = {
             "role": "user",
             "content": [
                 {"type": "input_text", "text": (
-                f"Goal: {user_goal}\n\n"
-                f"Output all relevant information from {filename}, in a markdown bullet list without quotes."
+                    f"Goal: {user_goal}\n\n"
+                    f"Output all relevant information from {filename}, in a markdown bullet list without quotes."
+                    f"Include any relevant details that would help a developer understand the content and purpose of this file. (e.g. file path)\n\n"
+                    f"File path: {s3_file_path}\n\n"
                 )},
             ]
         }
@@ -209,7 +211,7 @@ class ArtifactsAnalyzer:
                         s3_url = self.s3_client.presigned_get(key=a.path, expires_in=360) # expires in 6 mins
                         logger.info(f"Artifact {a.name} presigned URL: {s3_url}")
 
-                    artifact_prompt = self.analyze_prompt(user_goal, a.name, a.description, s3_url, file_type)
+                    artifact_prompt = self.analyze_prompt(user_goal, a.name, a.description, s3_url, file_type, a.path)
                     result = artifact_llm.response(artifact_prompt)
                     result = self._extract_markdown(result)
 
@@ -295,9 +297,5 @@ class ArtifactsAnalyzer:
             return self._artifacts_log_info(thread_id)
 
         except Exception as e:
-            self._append_artifacts_log(
-            thread_id,
-            f"## Error reading artifacts: {e}\n\n"
-            )
             logger.error(f"Error reading artifacts: {e}")
             

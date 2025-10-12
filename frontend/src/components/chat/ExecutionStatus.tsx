@@ -1,8 +1,8 @@
 // src/components/chat/ExecutionStatus.tsx
 import React from 'react';
 import styled from 'styled-components';
-import { ChevronDown, Play, CheckCircle, X, Code2, Terminal, AlertCircle, Wrench, Info } from 'lucide-react';
-import type { Message } from '../../types/chat';
+import { ChevronDown, Play, CheckCircle, X, Code2, Terminal, AlertCircle, Wrench, Info, FileText, BarChart } from 'lucide-react';
+import type { Message, Artifact } from '../../types/chat';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -27,8 +27,10 @@ interface ExecutionStep {
 interface ExecutionStatusProps {
   groupId: string;
   steps: ExecutionStep[];
+  artifacts: Artifact[];
   isExpanded: boolean;
   onToggle: (groupId: string) => void;
+  onArtifactClick?: (artifactId: string) => void;
   currentNode?: string | null;
   isRunning?: boolean;
 }
@@ -131,7 +133,7 @@ const ExecutionSteps = styled.div<{ $isExpanded: boolean }>`
   border-top: none;
   border-radius: 0 0 12px 12px;
   background: ${props => props.theme.background};
-  max-height: ${props => props.$isExpanded ? '400px' : '0'};
+  max-height: ${props => props.$isExpanded ? '560px' : '0'};
   opacity: ${props => props.$isExpanded ? 1 : 0};
   overflow-y: auto;
   overflow-x: hidden;
@@ -286,6 +288,66 @@ const StepTimestamp = styled.div`
   margin-top: 4px;
 `;
 
+const ArtifactsSection = styled.div`
+  padding: 12px 20px 20px;
+  border-top: 1px solid ${props => props.theme.glassBorder};
+  background: ${props => props.theme.glassBackground};
+`;
+
+const ArtifactsHeading = styled.div`
+  font-size: 12px;
+  font-weight: 600;
+  color: ${props => props.theme.textPrimary};
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+`;
+
+const ArtifactList = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+`;
+
+const ArtifactItem = styled.button`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid ${props => props.theme.glassBorder};
+  background: ${props => props.theme.background};
+  color: ${props => props.theme.textPrimary};
+  cursor: pointer;
+  transition: all 0.2s ease;
+
+  &:hover {
+    background: ${props => props.theme.glassHover};
+    border-color: ${props => props.theme.accent}60;
+    transform: translateY(-1px);
+  }
+`;
+
+const ArtifactInfo = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  span:first-child {
+    font-size: 12px;
+    font-weight: 600;
+    color: ${props => props.theme.textPrimary};
+  }
+
+  span:last-child {
+    font-size: 11px;
+    color: ${props => props.theme.textSecondary};
+  }
+`;
+
 // Utility functions
 const getStepIcon = (step: ExecutionStep) => {
   switch (step.kind) {
@@ -391,11 +453,25 @@ const formatTimestamp = (timestamp: Date): string => {
   });
 };
 
+const getArtifactIcon = (artifact: Artifact) => {
+  switch (artifact.type) {
+    case 'chart':
+      return <BarChart size={16} />;
+    case 'code':
+      return <Code2 size={16} />;
+    case 'document':
+    default:
+      return <FileText size={16} />;
+  }
+};
+
 export const ExecutionStatus: React.FC<ExecutionStatusProps> = ({
   groupId,
   steps,
+  artifacts = [],
   isExpanded,
   onToggle,
+  onArtifactClick,
   currentNode,
   isRunning = false
 }) => {
@@ -444,43 +520,79 @@ export const ExecutionStatus: React.FC<ExecutionStatusProps> = ({
       </ExecutionHeader>
 
       <ExecutionSteps $isExpanded={isExpanded}>
-        {steps.map((step, index) => {
-          const codeBlock = extractCodeBlock(step.message);
-          const status = getStepStatus(step);
-          const description = getStepDescription(step);
-          const shouldRenderMarkdown = step.kind === 'tool-call' || step.kind === 'thought';
+        {steps.length === 0 ? (
+          <ExecutionStep $isActive={false}>
+            <StepIcon $status="info">
+              <Info size={10} />
+            </StepIcon>
+            <StepContent>
+              <h5>No execution steps yet</h5>
+              <p>Steps will appear here as the agent makes progress.</p>
+            </StepContent>
+          </ExecutionStep>
+        ) : (
+          steps.map((step, index) => {
+            const codeBlock = extractCodeBlock(step.message);
+            const status = getStepStatus(step);
+            const description = getStepDescription(step);
+            const shouldRenderMarkdown = step.kind === 'tool-call' || step.kind === 'thought';
 
-          return (
-            <ExecutionStep
-              key={step.id}
-              $isActive={isRunning && index === steps.length - 1}
-            >
-              <StepIcon $status={status}>
-                {getStepIcon(step)}
-              </StepIcon>
-              <StepContent>
-                <h5>{getStepTitle(step)}</h5>
-                {shouldRenderMarkdown ? (
-                  <StepMarkdown>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {step.message.text}
-                    </ReactMarkdown>
-                  </StepMarkdown>
-                ) : (
-                  <>
-                    {description && <p>{description}</p>}
-                    {codeBlock && (
-                      <pre>{codeBlock.length > 500 ? codeBlock.substring(0, 500) + '\n...' : codeBlock}</pre>
-                    )}
-                  </>
-                )}
-                <StepTimestamp>
-                  {formatTimestamp(step.message.timestamp)}
-                </StepTimestamp>
-              </StepContent>
-            </ExecutionStep>
-          );
-        })}
+            return (
+              <ExecutionStep
+                key={step.id}
+                $isActive={isRunning && index === steps.length - 1}
+              >
+                <StepIcon $status={status}>
+                  {getStepIcon(step)}
+                </StepIcon>
+                <StepContent>
+                  <h5>{getStepTitle(step)}</h5>
+                  {shouldRenderMarkdown ? (
+                    <StepMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {step.message.text}
+                      </ReactMarkdown>
+                    </StepMarkdown>
+                  ) : (
+                    <>
+                      {description && <p>{description}</p>}
+                      {codeBlock && (
+                        <pre>{codeBlock.length > 500 ? codeBlock.substring(0, 500) + '\n...' : codeBlock}</pre>
+                      )}
+                    </>
+                  )}
+                  <StepTimestamp>
+                    {formatTimestamp(step.message.timestamp)}
+                  </StepTimestamp>
+                </StepContent>
+              </ExecutionStep>
+            );
+          })
+        )}
+
+        {artifacts.length > 0 && (
+          <ArtifactsSection>
+            <ArtifactsHeading>
+              <FileText size={14} />
+              Generated Artifacts ({artifacts.length})
+            </ArtifactsHeading>
+            <ArtifactList>
+              {artifacts.map(artifact => (
+                <ArtifactItem
+                  key={artifact.id}
+                  type="button"
+                  onClick={() => onArtifactClick?.(artifact.id)}
+                >
+                  {getArtifactIcon(artifact)}
+                  <ArtifactInfo>
+                    <span>{artifact.filename || artifact.title || 'Unnamed artifact'}</span>
+                    <span>{artifact.language || artifact.type || 'artifact'}</span>
+                  </ArtifactInfo>
+                </ArtifactItem>
+              ))}
+            </ArtifactList>
+          </ArtifactsSection>
+        )}
       </ExecutionSteps>
     </ExecutionContainer>
   );

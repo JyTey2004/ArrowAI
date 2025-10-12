@@ -1,0 +1,51 @@
+{
+    "method": "tools/call",
+    "params": {
+        "name": "generate_slide",
+        "arguments": {
+            "input": {
+                "thread_id": "41ec09a3-68f8-4ccb-9fc0-5adb82fe9d78",
+                "insight": {
+                    "task": "Create a Total absolute discrepancy by year chart that is suitable for a presentation for slide: Pharmaceutical sales from 2014-2020 show significant gaps versus targets",
+                    "data_assets": [
+                        {
+                            "name": "pharma_data.csv",
+                            "description": "Pharmaceutical Sales data",
+                            "path": "s3://arrowai/threads/41ec09a3-68f8-4ccb-9fc0-5adb82fe9d78/uploads/pharma_data.csv"
+                        },
+                        {
+                            "name": "pharma_targets.csv",
+                            "description": "Pharmaceutical Sales targets",
+                            "path": "s3://arrowai/threads/41ec09a3-68f8-4ccb-9fc0-5adb82fe9d78/uploads/pharma_targets.csv"
+                        }
+                    ],
+                    "research_context": [
+                        {
+                            "name": "discrepancy_report.md",
+                            "path": "s3://arrowai/threads/41ec09a3-68f8-4ccb-9fc0-5adb82fe9d78/artifacts/outputs/discrepancy_report.md",
+                            "description": null,
+                            "content": null
+                        },
+                        {
+                            "name": "narrative.md",
+                            "path": "s3://arrowai/threads/41ec09a3-68f8-4ccb-9fc0-5adb82fe9d78/narrative/narrative.md",
+                            "description": null,
+                            "content": null
+                        }
+                    ]
+                },
+                "slide_outline": {
+                    "slide_id": "S01",
+                    "title": "Pharmaceutical sales from 2014-2020 show significant gaps versus targets",
+                    "message": "Analysis reveals persistent and large discrepancies between actual sales and targets across multiple products and years, highlighting a critical misalignment in sales performance.",
+                    "expected_evidence": [
+                        "Total absolute discrepancy by year chart",
+                        "Summary table of key discrepancies"
+                    ],
+                    "notes": "Start by framing the overall challenge of sales under- or overperformance relative to targets, setting the stage for deeper analysis.",
+                    "layout": "Single Chart + Bullets"
+                }
+            }
+        }
+    }
+}

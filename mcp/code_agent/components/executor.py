@@ -259,8 +259,8 @@ class CodeSandbox:
         header = "# Run Log\n\n"
         prev = logf.read_text(encoding="utf-8", errors="ignore") if logf.exists() else header
         logf.write_text(prev + block, encoding="utf-8")
-        
-    def _update_last_eval_block(self, thread_id: str, verdict: str, eval_text: str, output_summary: str) -> None:
+
+    def _update_last_eval_block(self, thread_id: str, verdict: str, eval_text: str, output_summary: str, artifacts_extra: List[Dict[str, Any]]) -> None:
         """Replace last '**Evaluation (by Evaluator):' with a structured block."""
         run_log = self.run_log_path(thread_id)
         text = run_log.read_text() if run_log.exists() else ""
@@ -272,10 +272,15 @@ class CodeSandbox:
         prefix, tail = parts
         tail_split = tail.split("\n", 1)
         remainder = tail_split[1] if len(tail_split) == 2 else ""
+        artifacts_txt = "\n".join(
+            f"- {a['name']}: `{a['path']}` (desc: {a.get('description', 'No description')}) (size={a.get('size', 0)})"
+            for a in artifacts_extra
+        ) or "- none"
         block = (
             f" {verdict}\n"
             f"**Eval:** {eval_text}\n"
             f"**Output summary:** {output_summary}\n\n"
+            f"**Artifacts:**\n{artifacts_txt}\n"
             "---\n\n"
         )
         run_log.write_text(prefix + "**Evaluation (by Evaluator):**" + block + remainder)
@@ -352,11 +357,12 @@ class CodeSandbox:
                 out.append({
                     "name": a["name"],
                     "path": f"s3://{self.s3.bucket}/{key}",
-                    "size": a["size"],
+                    "size": a.get("size", 0),
+                    "description": a.get("description", "No description"),
                 })
             except Exception as e:
                 logger.warning(f"S3 upload failed for {local}: {e}")
-                out.append({"name": a["name"], "path": a["path"], "size": a["size"]})
+                out.append({"name": a["name"], "path": a["path"], "size": a.get("size", 0), "description": a.get("description", "No description")})
 
         return out
 
@@ -379,13 +385,13 @@ class CodeSandbox:
             "code": code,
             "stdout": (stdout or "")[:2000],
             "stderr": (stderr or "")[:8000],
-            "files_out": artifacts or [],
+            "all_files": artifacts or [],
             "code_filename": "",
         }
         return (
             "Given the task, stdout, stderr, and files produced by a Python cell, evaluate how well the task was accomplished and give the code a filename.\n"
             "output_summary should be a concise summary of the main outputs including artifacts produced if any in bullet points.\n"
-            "Inputs JSON below. Return ONE JSON object with keys: eval, verdict, output_summary, code_filename.\n"
+            "Inputs JSON below. Return ONE JSON object with keys: eval, verdict, output_summary, artifacts, code_filename.\n"
             + json.dumps(payload, ensure_ascii=False)
         )
 
@@ -532,13 +538,13 @@ class CodeSandbox:
         )
 
         # (3) Artifact scan — outputs/ only
-        artifacts_after = self._artifact_index(run_dir, only_under=self.outputs_dirname)
+        all_artifacts = self._artifact_index(run_dir, only_under=self.outputs_dirname)
 
         # (4) Summarize & append Run Log (Run Log is never passed to any LLM)
         summary = self._summarize_for_run_log(code_to_run, stdout, stderr)  # name retained; only used for text
         
         # only keep artifacts that were newly created in this cell
-        artifacts_after = [a for a in artifacts_after if a not in current_artifacts]
+        artifacts_after = [a for a in all_artifacts if a not in current_artifacts]
         
         self._append_run_step(
             thread_id=thread_id,
@@ -560,7 +566,7 @@ class CodeSandbox:
         artifacts_extra: List[Dict[str, Any]] = []
 
         if eval_llm and req.task:
-            eval_prompt = self._build_eval_prompt(req.task, stdout, stderr, code_to_run, artifacts_after)
+            eval_prompt = self._build_eval_prompt(req.task, stdout, stderr, code_to_run, all_artifacts)
             raw = eval_llm.generate(eval_prompt).strip()
             try:
                 obj = self._extract_json_blob(raw)
@@ -580,6 +586,7 @@ class CodeSandbox:
             verdict=verdict or "NO EVALUATION",
             eval_text=eval_text or (stderr or "")[:800],
             output_summary=output_summary or (stdout or "")[:800],
+            artifacts_extra=artifacts_extra
         )
         
         if verdict and isinstance(verdict, str) and verdict.upper().startswith("FAIL"):
@@ -614,14 +621,7 @@ class CodeSandbox:
             logger.warning(f"Failed to write code file {code_file_path}: {e}")
         
         # (6) Sync artifacts (outputs/ only) to S3 and reduce to minimal surface (name, path, size)
-        files_out_minimal = self._sync_artifacts_to_s3(thread_id, artifacts_after)
-        
-        # Add the description for the artifacts if provided by the evaluator
-        if artifacts_extra:
-            extra_map = {a["name"]: a for a in artifacts_extra if "name" in a}
-            for f in files_out_minimal:
-                if f["name"] in extra_map and "description" in extra_map[f["name"]]:
-                    f["description"] = extra_map[f["name"]]["description"]
+        files_out_minimal = self._sync_artifacts_to_s3(thread_id, artifacts_extra)
         
         # Convert files_out_minimal to File objects if needed
         files_out_minimal = [File(**f) for f in files_out_minimal]

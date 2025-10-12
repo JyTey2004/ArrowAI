@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import os, uuid, json, base64, asyncio
-from typing import Any, Dict, Optional, List, Callable, Literal
+from typing import Any, Dict, Optional, List, Callable, Literal, Iterable
 import re
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
@@ -34,6 +34,7 @@ CODE_AGENT_MCP_WS = os.environ.get("CODE_AGENT_MCP_WS", "http://localhost:5000/m
 RESEARCH_AGENT_MCP_WS = os.environ.get("RESEARCH_AGENT_MCP_WS", "http://localhost:5001/mcp/research_agent")
 ARTIFACT_AGENT_MCP_WS = os.environ.get("ARTIFACT_AGENT_MCP_WS", "http://localhost:5002/mcp/artifacts")
 NARRATIVE_AGENT_MCP_WS = os.environ.get("NARRATIVE_AGENT_MCP_WS", "http://localhost:5003/mcp/narrative_agent")
+PRESENTATION_AGENT_MCP_WS = os.environ.get("PRESENTATION_AGENT_MCP_WS", "http://localhost:5004/mcp/presentation_agent")
 
 s3c = S3Client(
     bucket_name=DEFAULT_BUCKET,
@@ -78,6 +79,10 @@ async def _ensure_tools():
                 },
                 "narrative_agent": {
                     "url": NARRATIVE_AGENT_MCP_WS,
+                    "transport": "streamable_http",
+                },
+                "presentation_agent": {
+                    "url": PRESENTATION_AGENT_MCP_WS,
                     "transport": "streamable_http",
                 },
             }
@@ -237,7 +242,7 @@ def _parse_tool_payload(message: ToolMessage) -> Optional[dict]:
             return None
     return None
 
-def     _extract_json(s: str) -> str:
+def _extract_json(s: str) -> str:
     """Return the first JSON object found (handles fenced code blocks)."""
     if not s:
         return ""
@@ -249,6 +254,55 @@ def     _extract_json(s: str) -> str:
     brace = re.search(r"\{.*\}", s, flags=re.DOTALL)
     return brace.group(0).strip() if brace else s.strip()
 
+def args_to_markdown(args: dict) -> str:
+    def scalar_to_str(x: Any) -> str:
+        if x is None:
+            return "null"
+        if isinstance(x, bool):
+            return "true" if x else "false"
+        return str(x)
+
+    def render(obj: Any, indent: int = 0) -> Iterable[str]:
+        pad = "  " * indent
+        next_pad = "  " * (indent + 1)
+
+        if isinstance(obj, dict):
+            if not obj:
+                yield f"{pad}- (empty dict)"
+            for k, v in obj.items():
+                if isinstance(v, (dict, list, tuple, set)):
+                    yield f"{pad}- **{k}**:"
+                    yield from render(v, indent + 1)
+                else:
+                    s = scalar_to_str(v)
+                    if "\n" in s:
+                        lines = s.splitlines()
+                        yield f"{pad}- **{k}**:"
+                        for line in lines:
+                            yield f"{next_pad}- {line}"
+                    else:
+                        yield f"{pad}- **{k}**: {s}"
+
+        elif isinstance(obj, (list, tuple, set)):
+            seq = list(obj)
+            if not seq:
+                yield f"{pad}- (empty list)"
+            for item in seq:
+                if isinstance(item, (dict, list, tuple, set)):
+                    yield f"{pad}-"
+                    yield from render(item, indent + 1)
+                else:
+                    s = scalar_to_str(item)
+                    if "\n" in s:
+                        yield f"{pad}-"
+                        for line in s.splitlines():
+                            yield f"{next_pad}- {line}"
+                    else:
+                        yield f"{pad}- {s}"
+        else:
+            yield f"{pad}- {scalar_to_str(obj)}"
+
+    return "\n".join(render(args))
 
 # -----------------------
 # 3) System prompts
@@ -286,7 +340,8 @@ EXECUTE_SYSTEM = (
     "- Code Agent: Completes task that requires code execution.\n"
     "- Research Agent: Completes tasks that require web search and information gathering.\n"
     "- Artifact Agent: Understands and manages artifacts (files, documents, etc.) produced during execution.\n"
-    "- Narrative Agent: Crafts narratives, reports, and presentations based on gathered information and artifacts.\n\n"
+    "- Narrative Agent: Crafts narratives, reports, and presentations based on gathered information and artifacts.\n"
+    "- Presentation Agent: Generates outlines, slide drafts, and presentation-ready artifacts leveraging code outputs and narratives.\n\n"
     "Your goal is to complete the user's request by using these tools effectively.\n"
     "Start by understanding the complete situation before proposing solutions, ask follow up questions if you do not understand.\n"
     
@@ -653,17 +708,20 @@ async def execute_node(state: MCPState, config: RunnableConfig):
             except Exception:
                 metadata = {}
             server_name = metadata.get("server") or metadata.get("mcp_server")
+            
+            tool_args_md = args_to_markdown(tool_call.get("args", {}))
+            metadata_md = args_to_markdown(metadata)
 
-            await emit({
-                "event": "tool.call",
-                "tool": tool_name,
-                "description": description,
-                "args": tool_call.get("args", {}),
-                "server": server_name,
-                "metadata": metadata,
-            })
+            # await emit({
+            #     "event": "tool.call",
+            #     "tool": tool_name,
+            #     "description": description,
+            #     "args": tool_args_md,
+            #     "server": server_name,
+            #     "metadata": metadata_md,
+            # })
             await emit({"event": "thought", "text": f"Decided to use tool: {tool_name}"})
-            await emit({"event": "sandbox.stdout", "text": f"Using tool:{tool_name} with args {json.dumps(tool_call.get('args', {}), indent=2)}\n"})
+            await emit({"event": "tool.call", "text": f"Using tool:{tool_name} with details:\n{tool_args_md}\n"})
 
         emitted_artifact_uris: set[str] = set()
         updated_tool_messages = [m for m in all_messages if isinstance(m, ToolMessage)]
@@ -792,10 +850,17 @@ def route_after_clarify(state: MCPState) -> Literal["todo", "reply", "execute"]:
 
 async def route_after_execute(state: MCPState, config: RunnableConfig) -> Literal["tools", "reply"]:
     try:
+        exec_ctx = config["configurable"]["exec_ctx"]
+        base_prefix = exec_ctx["base_prefix"]
         emit = config["configurable"]["emit"]
         if state.get("done"):
+            context_summary = state.get("context_summary") or ""
+            if context_summary:
+                cel_text = _append_cel(base_prefix, f"## Execution Summary:\n{context_summary}\n")
+                emit({"event": "cel", "content": cel_text})
+                logger.info(f"Route after execute appended context summary to CEL.md for thread_id={config['configurable']['thread_id']}, step_idx={state.get('step_idx',0)}:\n{context_summary}\n--- end summary ---\n\n")
             return "reply"
-        
+
         messages = state["messages"]
         
         # logger.info(f"Route after execute checking messages for thread_id={config['configurable']['thread_id']}, step_idx={state.get('step_idx',0)}:\n{messages}\n--- end messages ---\n\n")
@@ -804,18 +869,19 @@ async def route_after_execute(state: MCPState, config: RunnableConfig) -> Litera
         
         if isinstance(last_message, AIMessage):
             if last_message.tool_calls: 
+                for tc in last_message.tool_calls:
+                    if tc.get("name") in _tool_metadata:
+                        # Valid tool call found, route to tools
+                        logger.info(f"Route after execute found tool call for thread_id={config['configurable']['thread_id']}, step_idx={state.get('step_idx',0)}: {tc}")
+                        tool_args_md = args_to_markdown(tc.get("args", {}))
+                        cel_text = _append_cel(base_prefix, f"## Tool Call:\nTool: {tc.get('name')}\nArgs: {tool_args_md}\n")
+                emit({"event": "cel", "content": cel_text})
                 return "tools"
-        
-        
+            
+            
         # If no tool calls, we assume done
-        exec_ctx = config["configurable"]["exec_ctx"]
-        base_prefix = exec_ctx["base_prefix"]
-        context_summary = state.get("context_summary") or ""
-        if context_summary:
-            cel_text = _append_cel(base_prefix, f"## Execution Summary:\n{context_summary}\n")
-            emit({"event": "cel", "content": cel_text})
-            logger.info(f"Route after execute appended context summary to CEL.md for thread_id={config['configurable']['thread_id']}, step_idx={state.get('step_idx',0)}:\n{context_summary}\n--- end summary ---\n\n")
-    
+
+
         return "reply"
 
     except Exception as e:

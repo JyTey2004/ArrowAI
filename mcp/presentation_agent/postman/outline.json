@@ -1,0 +1,29 @@
+{
+    "method": "tools/call",
+    "params": {
+        "name": "plan_presentation_outline",
+        "arguments": {
+            "input": {
+                "topic": "Analyze the pharma_data.csv and pharma_targets.csv and tell me how close are my sales numbers from hitting my targets.",
+                "audience": "general",
+                "desired_outcome": "",
+                "slide_count_hint": null,
+                "include_appendix": true,
+                "artifacts": [
+                    {
+                        "name": "discrepancy_report.md",
+                        "path": "s3://arrowai/threads/41ec09a3-68f8-4ccb-9fc0-5adb82fe9d78/artifacts/outputs/discrepancy_report.md",
+                        "summary": null,
+                        "content": null
+                    },
+                    {
+                        "name": "narrative.md",
+                        "path": "s3://arrowai/threads/41ec09a3-68f8-4ccb-9fc0-5adb82fe9d78/narrative/narrative.md",
+                        "summary": null,
+                        "content": null
+                    }
+                ]
+            }
+        }
+    }
+}

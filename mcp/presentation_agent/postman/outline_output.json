@@ -1,0 +1,113 @@
+{
+    "slides": [
+        {
+            "slide_id": "S01",
+            "title": "Pharmaceutical sales from 2014-2020 show significant gaps versus targets",
+            "message": "Analysis reveals persistent and large discrepancies between actual sales and targets across multiple products and years, highlighting a critical misalignment in sales performance.",
+            "expected_evidence": [
+                "Total absolute discrepancy by year chart",
+                "Summary table of key discrepancies"
+            ],
+            "notes": "Start by framing the overall challenge of sales under- or overperformance relative to targets, setting the stage for deeper analysis.",
+            "layout": "Single Chart + Bullets"
+        },
+        {
+            "slide_id": "S02",
+            "title": "2016 had the largest sales-target gap driven by a few key products",
+            "message": "The year 2016 recorded the highest total absolute discrepancy (16,574 units), with products N02BE and M01AB exceeding targets by over 170% and 220%, respectively.",
+            "expected_evidence": [
+                "Bar chart of discrepancies by product for 2016",
+                "Table of top product discrepancies in 2016"
+            ],
+            "notes": "Highlight the peak discrepancy year and its main contributors to focus attention on critical problem areas.",
+            "layout": "Single Chart + Bullets"
+        },
+        {
+            "slide_id": "S03",
+            "title": "Discrepancies cluster in mid-to-late years indicating target-setting or market shifts",
+            "message": "Discrepancies are not evenly spread but concentrate in years 2015-2020, suggesting evolving market dynamics or misaligned target methodologies over time.",
+            "expected_evidence": [
+                "Line chart of yearly discrepancy trends",
+                "Heatmap of product-year relative discrepancies"
+            ],
+            "notes": "Explain temporal patterns to motivate investigation into causes beyond isolated incidents.",
+            "layout": "Single Chart + Bullets"
+        },
+        {
+            "slide_id": "S04",
+            "title": "Data quality issues in actual sales data may distort discrepancy analysis",
+            "message": "Anomalies such as invalid hour entries and zero values in sales data require cleaning to ensure accurate measurement and trend detection.",
+            "expected_evidence": [
+                "Summary statistics of data anomalies",
+                "Examples of invalid data entries"
+            ],
+            "notes": "Address data integrity to justify recommended preprocessing steps before further analysis.",
+            "layout": "Two column text"
+        },
+        {
+            "slide_id": "S05",
+            "title": "Large, persistent discrepancies reveal gaps in sales planning and execution",
+            "message": "The scale and consistency of discrepancies indicate weaknesses in sales target setting, communication, and real-time performance tracking.",
+            "expected_evidence": [
+                "Discrepancy persistence chart by product",
+                "Narrative summary of strategic gaps"
+            ],
+            "notes": "Transition from problem diagnosis to identifying organizational and process weaknesses.",
+            "layout": "Single Chart + Bullets"
+        },
+        {
+            "slide_id": "S06",
+            "title": "Implement strategic oversight to align sales campaigns with targets",
+            "message": "Enhancing cross-departmental communication and project visibility will improve alignment of sales and marketing efforts with realistic targets.",
+            "expected_evidence": [
+                "Framework diagram of strategic planning and execution oversight",
+                "Case study summary from KanBo platform"
+            ],
+            "notes": "Introduce first recommended action focusing on planning and execution improvements.",
+            "layout": "Single Chart + Bullets"
+        },
+        {
+            "slide_id": "S07",
+            "title": "Align KPIs and enable real-time sales force adjustments to boost effectiveness",
+            "message": "Tight KPI alignment and mobile-first dashboards empower sales teams to respond quickly and stay focused on priority goals.",
+            "expected_evidence": [
+                "KPI alignment framework",
+                "Example dashboard screenshot from Elevate.so"
+            ],
+            "notes": "Present second recommendation emphasizing data-driven sales force management.",
+            "layout": "Single Chart + Bullets"
+        },
+        {
+            "slide_id": "S08",
+            "title": "Enhance collaboration and risk management to improve sales outcomes",
+            "message": "Leveraging project management frameworks to foster teamwork and anticipate risks will increase delivery quality and customer satisfaction.",
+            "expected_evidence": [
+                "Collaboration and risk management model",
+                "Supporting evidence from KanBo healthcare sales insights"
+            ],
+            "notes": "Complete recommendations with focus on collaboration and risk mitigation.",
+            "layout": "Single Chart + Bullets"
+        },
+        {
+            "slide_id": "S09",
+            "title": "Clean data, investigate root causes, and pilot project management strategies",
+            "message": "Immediate next steps include data preprocessing, detailed discrepancy analysis, and piloting recommended strategies with performance monitoring.",
+            "expected_evidence": [
+                "Roadmap timeline with 30/60/90 day milestones",
+                "Owner and KPI assignment table"
+            ],
+            "notes": "Outline actionable plan to operationalize insights and track progress.",
+            "layout": "Single Chart + Bullets"
+        },
+        {
+            "slide_id": "S10",
+            "title": "Mitigate risks from data quality and change management to ensure success",
+            "message": "Addressing data anomalies and securing stakeholder buy-in are critical to avoid derailment of improvement initiatives.",
+            "expected_evidence": [
+                "Risk matrix with mitigation strategies"
+            ],
+            "notes": "Highlight key risks and how to proactively manage them to safeguard the plan.",
+            "layout": "Single Chart + Bullets"
+        }
+    ]
+}

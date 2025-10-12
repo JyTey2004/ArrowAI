@@ -1,0 +1,819 @@
+# Code Sandbox — stateful, Jupyter-style executor with Run Log and S3 sync.
+"""
+Code Sandbox — stateful, Jupyter-style executor with Run Log and S3 sync.
+
+Goals (maps to user's requirements):
+1) Stateful cell execution so code in later cells can reuse earlier variables.
+2) On-the-fly package installation ("import and download any module needed").
+3) Full read/write access under a provided tmp directory.
+4) Summarize code and outputs, and append a structured Step Block to RUN_LOG.md.
+5) Optionally use an LLM to write the code for the cell before execution.
+6) Sync ONLY artifacts produced under the outputs/ directory to S3, and return files_out
+   with only: name, path (S3 URI), size.
+
+Design notes
+- Each run/session gets its own Kernel (namespace dict + working dir + Run Log path).
+- Package install uses pip as a subprocess into the current env (demo-friendly).
+- Outputs are captured (stdout/stderr) and a lightweight artifact index is built
+  by hashing files under outputs/. We keep paths relative to the run_dir.
+- LLMs are abstracted behind a minimal interface (LLMClient). Wire your model
+  of choice (e.g., OpenAI, Anthropic) by implementing .generate().
+
+Security: This executes arbitrary Python. For demos only; do not expose publicly
+without sandboxing (containers, seccomp, resource limits, network egress blocks).
+"""
+from __future__ import annotations
+
+import contextlib
+import dataclasses
+import hashlib
+import io
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import textwrap
+import threading
+import time
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from components.models import OutlineArtifact
+
+import logging
+from utils.code_extracters import _extract_python
+from aws.s3_client import S3Client  # NEW
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# --------------------------- Public Interfaces --------------------------------
+
+class LLMClient:
+    """Minimal LLM interface. Implement .generate(prompt) to return text."""
+    def generate(self, prompt: str, **kwargs) -> str:  # pragma: no cover (interface)
+        raise NotImplementedError
+
+@dataclasses.dataclass
+class ExecRequest:
+    code: Optional[str] = None
+    language: str = "python"
+    files_in: Optional[List[Dict[str, str]]] = None
+    timeout_s: Optional[int] = None
+    task: Optional[str] = None
+    pip: Optional[List[str]] = None
+    use_llm_writer: bool = False
+    repair_attempts: int = 2
+
+@dataclasses.dataclass
+class ExecResult:
+    ok: bool
+    code: Optional[Dict[str, Any]]  # {"filename": str, "text": str} or None text if error
+    stdout: str
+    stderr: str
+    display: Optional[Any]
+    files_out: List[Dict[str, Any]]  # [{name, path (S3 or local), size}]
+    summary: str  # short textual summary used for Run Log
+
+# ----------------------------- Kernel -----------------------------------------
+
+class Kernel:
+    """One stateful Python execution context per run/session."""
+    def __init__(self, run_dir: pathlib.Path):
+        self.run_dir = run_dir
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.globals: Dict[str, Any] = {
+            "__name__": "__sandbox__",
+            "__file__": str(self.run_dir / "__cell__.py"),
+            "RUN_DIR": self.run_dir,
+        }
+        self.locals: Dict[str, Any] = self.globals
+
+    def exec_code(self, code: str, timeout_s: Optional[int] = None) -> Tuple[str, str, Optional[Any]]:
+        """Execute *Python* code in this kernel, capturing stdout/stderr."""
+        normalized = textwrap.dedent(code)
+        last_value: Optional[Any] = None
+        try:
+            compiled = compile(normalized, str(self.run_dir / "__cell__.py"), "exec")
+        except SyntaxError:
+            try:
+                compiled = compile(normalized, str(self.run_dir / "__cell__.py"), "single")
+            except Exception:
+                compiled = None
+
+        stdout_buf, stderr_buf = io.StringIO(), io.StringIO()
+
+        def _run():
+            nonlocal last_value
+            old_cwd = os.getcwd()
+            try:
+                os.makedirs(self.run_dir, exist_ok=True)
+                os.chdir(self.run_dir)
+                if compiled:
+                    exec(compiled, self.globals, self.locals)
+                else:
+                    exec(normalized, self.globals, self.locals)
+                last_value = self.globals.get("_", None)
+            except Exception:
+                import traceback
+                traceback.print_exc(file=stderr_buf)
+            finally:
+                try:
+                    os.chdir(old_cwd)
+                except Exception:
+                    pass
+
+        thread = threading.Thread(target=lambda: self._redirected(_run, stdout_buf, stderr_buf), daemon=True)
+        thread.start()
+        thread.join(timeout=timeout_s)
+        if thread.is_alive():
+            stderr_buf.write(f"\n[Sandbox] Timeout after {timeout_s}s — cell did not complete.\n")
+        return stdout_buf.getvalue(), stderr_buf.getvalue(), last_value
+
+    @staticmethod
+    def _redirected(fn, out: io.StringIO, err: io.StringIO):
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            fn()
+
+# --------------------------- Sandbox (Facade) ---------------------------------
+
+class CodeSandbox:
+    """High-level facade managing kernels by thread_id, Run Log updates, and S3 sync."""
+
+    def __init__(
+        self,
+        base_tmp_dir: str = "tmp",
+        s3_client: Optional[S3Client] = None,
+        s3_prefix: str = "threads",  # s3://bucket/threads/<thread_id>/artifacts/...
+        outputs_dirname: str = "outputs",
+        inputs_dirname: str = "inputs",
+    ):
+        self.base_tmp = pathlib.Path(base_tmp_dir).resolve()
+        self.base_tmp.mkdir(parents=True, exist_ok=True)
+        self._kernels: Dict[str, Kernel] = {}
+
+        # S3 config
+        self.s3: Optional[S3Client] = s3_client
+        self.s3_prefix = s3_prefix.strip("/ ")
+
+        # Layout
+        self.outputs_dirname = outputs_dirname.strip("/ ")
+        self.inputs_dirname = inputs_dirname.strip("/ ")
+
+    # ---------- Kernel/session management ----------
+    def _run_dir(self, thread_id: str) -> pathlib.Path:
+        return self.base_tmp / thread_id
+
+    def _ensure_layout(self, thread_id: str) -> None:
+        """Ensure run_dir, outputs/, and inputs/ exist."""
+        rd = self._run_dir(thread_id)
+        (rd / self.outputs_dirname).mkdir(parents=True, exist_ok=True)
+        (rd / self.inputs_dirname).mkdir(parents=True, exist_ok=True)
+
+    def get_kernel(self, thread_id: str) -> Kernel:
+        if thread_id not in self._kernels:
+            self._ensure_layout(thread_id)
+            kernel = Kernel(self._run_dir(thread_id))
+            # inject convenience globals
+            kernel.globals["OUTPUTS_DIR"] = str(self._run_dir(thread_id) / self.outputs_dirname)
+            kernel.globals["INPUTS_DIR"] = str(self._run_dir(thread_id) / self.inputs_dirname)
+            self._kernels[thread_id] = kernel
+        else:
+            # Make sure layout still exists (idempotent)
+            self._ensure_layout(thread_id)
+            k = self._kernels[thread_id]
+            k.globals["OUTPUTS_DIR"] = str(self._run_dir(thread_id) / self.outputs_dirname)
+            k.globals["INPUTS_DIR"] = str(self._run_dir(thread_id) / self.inputs_dirname)
+        return self._kernels[thread_id]
+
+    # ---------- Package management ----------
+    def ensure_packages(self, packages: Iterable[str]) -> Tuple[bool, str]:
+        """Install packages via pip into the current environment."""
+        if not packages:
+            return True, ""
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", *packages]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            ok = proc.returncode == 0
+            log = (proc.stdout or "") + (proc.stderr or "")
+            return ok, log
+        except Exception as e:  # pragma: no cover
+            return False, f"pip failed: {e}"
+
+    # ---------- Run Log utilities ----------
+    def run_log_path(self, thread_id: str) -> pathlib.Path:
+        return self._run_dir(thread_id) / "RUN_LOG.md"
+    
+    def cel_log_path(self, thread_id: str) -> pathlib.Path:
+        return self._run_dir(thread_id) / "CEL.md"
+    
+    def artifact_log_path(self, thread_id: str) -> pathlib.Path:
+        return self._run_dir(thread_id) / "ARTIFACTS.md"
+    
+    def _append_run_log(self, thread_id: str, text: str) -> None:
+        logf = self.run_log_path(thread_id)
+        logf.parent.mkdir(parents=True, exist_ok=True)
+        header = "# Run Log\n\n"
+        prev = logf.read_text(encoding="utf-8", errors="ignore") if logf.exists() else header
+        logf.write_text(prev + text + "\n", encoding="utf-8")
+        
+    def _append_cel_log(self, thread_id: str, text: str) -> None:
+        logf = self.cel_log_path(thread_id)
+        logf.parent.mkdir(parents=True, exist_ok=True)
+        header = "# CEL Log\n\n"
+        prev = logf.read_text(encoding="utf-8", errors="ignore") if logf.exists() else header
+        logf.write_text(prev + text + "\n", encoding="utf-8")
+
+    def _append_artifact_log(self, thread_id: str, text: str) -> None:
+        logf = self.artifact_log_path(thread_id)
+        logf.parent.mkdir(parents=True, exist_ok=True)
+        header = "# Artifacts\n\n"
+        prev = logf.read_text(encoding="utf-8", errors="ignore") if logf.exists() else header
+        logf.write_text(prev + text + "\n", encoding="utf-8")
+
+    def _append_run_step(
+        self,
+        thread_id: str,
+        tool_name: str,
+        task: str,
+        # attempts_used: int,
+        # final_code: str,
+        artifacts: List[Dict[str, Any]],
+        evaluation_line: str = "PENDING",
+    ) -> None:
+        logf = self.run_log_path(thread_id)
+        logf.parent.mkdir(parents=True, exist_ok=True)
+        # when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        art_lines = "\n".join(
+            f"- {a['name']}: `{a['path']}` (desc: {a.get('description', 'No description')}) (size={a['size']})" for a in artifacts
+        )
+        block = (
+            # f"### Step: {tool_name}\n"
+            # f"**When:** {when}\n"
+            # f"**Inputs:** {inputs_summary}\n"
+            f"**Task:** {task}\n"
+            # f"**Final Code ({attempts_used} Fixes):**\n```\n{final_code}\n```\n"
+            # f"**Artifacts:**\n{art_lines or '- none'}\n"
+            f"**Evaluation:** {evaluation_line}\n"
+        )
+        header = "# Run Log\n\n"
+        prev = logf.read_text(encoding="utf-8", errors="ignore") if logf.exists() else header
+        logf.write_text(prev + block, encoding="utf-8")
+        
+    def _update_last_eval_block(self, thread_id: str, verdict: str, eval_text: str, output_summary: str) -> None:
+        """Replace last '**Evaluation (by Evaluator):' with a structured block."""
+        run_log = self.run_log_path(thread_id)
+        text = run_log.read_text() if run_log.exists() else ""
+        if not text:
+            return
+        parts = text.rsplit("**Evaluation:**", 1)
+        if len(parts) != 2:
+            return
+        prefix, tail = parts
+        tail_split = tail.split("\n", 1)
+        remainder = tail_split[1] if len(tail_split) == 2 else ""
+        block = (
+            f" {verdict}\n"
+            f"**Eval:** {eval_text}\n"
+            f"**Output summary:** {output_summary}\n\n"
+            "---\n\n"
+        )
+        run_log.write_text(prefix + "**Evaluation (by Evaluator):**" + block + remainder)
+
+    # ---------- Artifact indexing ----------
+    def _artifact_index(self, run_dir: pathlib.Path, only_under: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Scan files for artifacts. If only_under is set, scan only that subdirectory.
+        Returns list of dicts: {name, path (relative to run_dir), size, sha256}
+        """
+        artifacts: List[Dict[str, Any]] = []
+        base = run_dir / only_under if only_under else run_dir
+        if not base.exists():
+            return artifacts
+
+        for p in base.rglob("*"):
+            if not p.is_file():
+                continue
+            try:
+                data = p.read_bytes()
+            except Exception:
+                continue
+            rel = p.relative_to(run_dir)
+            artifacts.append({
+                "name": p.name,
+                "path": str(rel).replace("\\", "/"),
+                "size": len(data),
+                "sha256": hashlib.sha256(data).hexdigest()[:12],
+            })
+        return artifacts
+
+    # ---------- S3 sync ----------
+    def _s3_key_for(self, thread_id: str, relpath: str) -> str:
+        norm = relpath.replace("\\", "/").lstrip("./")
+        return f"{self.s3_prefix}/{thread_id}/artifacts/{norm}"
+
+    def _sync_artifacts_to_s3(
+        self, thread_id: str, artifacts: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Upload each artifact (outputs/ only) to S3.
+        Returns a new list with ONLY: { name, path: S3 URI (or local if no S3), size }.
+        """
+        run_dir = self._run_dir(thread_id)
+        out: List[Dict[str, Any]] = []
+
+        prefix = f"{self.outputs_dirname}/".replace("\\", "/")
+
+        for a in artifacts:
+            # absolute safety: never sync anything outside outputs/
+            if not a["path"].replace("\\", "/").startswith(prefix):
+                logger.info(f"Skipping non-outputs artifact: {a['path']}")
+                continue
+
+            local = (run_dir / a["path"]).resolve()
+            if not local.is_file():
+                out.append({"name": a["name"], "path": a["path"], "size": a["size"]})
+                continue
+
+            if not self.s3:
+                # No S3 → return local relative path
+                out.append({"name": a["name"], "path": a["path"], "size": a["size"]})
+                continue
+
+            key = self._s3_key_for(thread_id, a["path"])
+            try:
+                self.s3.put_file(
+                    local_path=str(local),
+                    key=key,
+                    content_type=None,     # auto-guess via client
+                    metadata={"thread_id": thread_id, "filename": a.get("name", "")},
+                    compute_sha256=False,
+                )
+                out.append({
+                    "name": a["name"],
+                    "path": f"s3://{self.s3.bucket}/{key}",
+                    "size": a["size"],
+                })
+            except Exception as e:
+                logger.warning(f"S3 upload failed for {local}: {e}")
+                out.append({"name": a["name"], "path": a["path"], "size": a["size"]})
+
+        return out
+
+    # ---------- LLM prompts ----------
+    def _build_writer_prompt(self, task: str, context_preview: str, execution_context: str, artifact_log: str, cel_log: str) -> str:
+        return (
+            "Read the CEL Log and understand the user goal and the task that works towards it.\n"
+            "Read the All Execution Summary and Artifacts as they will provide you context about the current task.\n"
+            "Read the namespaces carefully as you can use them.\n"
+            f"Task:\n{task}\n\n"
+            f"CEL Log:\n{cel_log}\n"
+            f"All Execution Summary:\n{execution_context}\n\n"
+            f"Artifacts:\n{artifact_log}\n"
+            f"Preview of namespace:\n{context_preview}\n"
+        )
+
+    def _build_eval_prompt(self, task: str, stdout: str, stderr: str, code: str, artifacts: List[Dict[str, Any]]) -> str:
+        payload = {
+            "task": task,
+            "code": code,
+            "stdout": (stdout or "")[:2000],
+            "stderr": (stderr or "")[:8000],
+            "files_out": artifacts or [],
+            "code_filename": "",
+        }
+        return (
+            "Given the task, stdout, stderr, and files produced by a Python cell, evaluate how well the task was accomplished and give the code a filename.\n"
+            "output_summary should be a concise summary of the main outputs including artifacts produced if any in bullet points.\n"
+            "Inputs JSON below. Return ONE JSON object with keys: eval, verdict, output_summary, code_filename.\n"
+            + json.dumps(payload, ensure_ascii=False)
+        )
+
+    def _build_repair_prompt(self, task: str, code: str, stdout: str, stderr: str) -> str:
+        return (
+            "You wrote a Python cell for the task below, but it failed.\n"
+            "Fix the code. Output ONLY raw Python code for a single cell (no fences, no commentary).\n\n"
+            "HARD RULES:\n"
+            "- Output ONLY raw Python code (no markdown fences).\n"
+            "- NEVER use `return` at top level; do not rely on variable echo. Use print(...) for everything.\n"
+            "- Prefix required diagnostics with 'EVIDENCE:' so they can be parsed.\n"
+            "- After writing each artifact, print: 'ARTIFACT: outputs/<filename>' (relative path under the outputs/ dir).\n"
+            "- Do NOT write files anywhere except under outputs/.\n"
+            "- If a required column or input is missing/unknown, print 'ERROR: <message>' and stop (do not fabricate).\n"
+            "- Always end with: print('DONE')\n"
+            "- If ETL/EDA is required, do it in this cell. Save new outputs under the outputs/ directory.\n"
+            "- Do not validate remote paths or create fake data.\n"
+            "\n"
+            "DO (examples to imitate):\n"
+            "print('EVIDENCE: key=row_count value=', len(df))\n"
+            "df.to_csv('outputs/profile.csv', index=False)\n"
+            "print('ARTIFACT: outputs/profile.csv')\n"
+            "with open('outputs/profile_summary.md', 'w', encoding='utf-8') as f:\n"
+            "    f.write('# Profile Summary\\n...')\n"
+            "print('ARTIFACT: outputs/profile_summary.md')\n"
+            "print('DONE')\n"
+            "\n"
+            "DON'T:\n"
+            "# return results  # FORBIDDEN\n"
+            "# df.head()       # Invisible without print\n"
+            "# display(df)     # Invisible here\n"
+            f"Task:\n{task}\n\n"
+            f"Previous code:\n{code}\n\n"
+            f"STDOUT (truncated):\n{stdout[:2000]}\n\nSTDERR (truncated):\n{stderr[:2000]}\n"
+            "Guidance:\n- Use CWD-relative paths.\n- Prefer simple, explicit code.\n"
+            "- Always save files to 'outputs/'.\n"
+        )
+
+    @staticmethod
+    def _extract_json_blob(text: str) -> dict:
+        s, e = text.find("{"), text.rfind("}")
+        if s == -1 or e == -1 or e <= s:
+            raise ValueError("Evaluator did not return JSON.")
+        return json.loads(text[s:e+1])
+
+    def _has_error(self, stderr: str) -> bool:
+        return ("Traceback (most recent call last)" in (stderr or "")) or ("[Sandbox] Timeout" in (stderr or ""))
+
+    def _maybe_repair_with_llm(
+        self,
+        thread_id: str,
+        req: ExecRequest,
+        kernel: Kernel,
+        code_llm: Optional[LLMClient],
+        code: str,
+        stdout: str,
+        stderr: str,
+        display: Optional[Any],
+    ) -> Tuple[str, str, str, Optional[Any], int]:
+        """Attempt to auto-repair failed code using the LLM up to req.repair_attempts times."""
+        attempts_used = 0
+        if not code_llm or not req.task or req.repair_attempts <= 0:
+            return code, stdout, stderr, display, attempts_used
+
+        while attempts_used < req.repair_attempts and self._has_error(stderr):
+            prompt = self._build_repair_prompt(req.task, code, stdout, stderr)
+            fixed = code_llm.generate(prompt)
+            logger.info(f"exec_cell: thread_id={thread_id}, repair attempt {attempts_used+1}, LLM fixed code:\n{fixed}\n--- end fixed code ---\n\n")
+            fixed = _extract_python(fixed)
+            code = fixed
+            stdout, stderr, display = kernel.exec_code(code, timeout_s=req.timeout_s)
+            logger.info(f"exec_cell: thread_id={thread_id}, repair attempt {attempts_used+1}, post-fix exec stdout:\n{stdout}\n--- end stdout ---\n\n")
+            attempts_used += 1
+
+        return code, stdout, stderr, display, attempts_used
+
+    # ---------- Public API ----------
+    def exec_cell(
+        self,
+        thread_id: str,
+        req: ExecRequest,
+        code_llm: Optional[LLMClient] = None,
+        eval_llm: Optional[LLMClient] = None,
+        execution_context: str = "",
+    ) -> ExecResult:
+        """Execute a cell with optional LLM writer/evaluator, update Run Log, and sync artifacts to S3 (outputs/ only)."""
+        if req.language.lower() != "python":
+            raise ValueError("Only Python is supported at the moment")
+        
+        logger.info(f"exec_cell: thread_id={thread_id}, received task={req.task}, code length={len(req.code) if req.code else 0}, pip={req.pip}, use_llm_writer={req.use_llm_writer}, repair_attempts={req.repair_attempts}")
+
+        kernel = self.get_kernel(thread_id)
+        run_dir = self._run_dir(thread_id)
+        self._ensure_layout(thread_id)  # idempotent
+
+        # (2) Ensure packages
+        pip_log = ""
+        if req.pip:
+            ok, pip_log = self.ensure_packages(req.pip)
+            if not ok:
+                pip_log = "[pip install failed]\n" + pip_log
+
+        # (6) LLM code writer (optional)
+        if not req.code and not req.use_llm_writer:
+            raise ValueError("No code provided and use_llm_writer is False")
+        
+        current_artifacts = self._artifact_index(run_dir, only_under=self.outputs_dirname)
+
+        code_to_run = ""
+
+        if req.code:
+            code_to_run = _extract_python(req.code)
+        elif req.use_llm_writer and code_llm and req.task:
+            ns_keys = sorted([k for k in list(kernel.globals.keys()) if not k.startswith("__")])
+            preview = f"Namespace keys: {ns_keys[:50]}"
+
+            execution_context = (execution_context or "").strip()
+            artifact_log = self.artifact_log_path(thread_id).read_text(encoding="utf-8", errors="ignore") if self.artifact_log_path(thread_id).exists() else ""
+            cel_log = self.cel_log_path(thread_id).read_text(encoding="utf-8", errors="ignore") if self.cel_log_path(thread_id).exists() else ""
+
+            prompt = self._build_writer_prompt(req.task, preview, execution_context, artifact_log, cel_log)
+            code_to_run = _extract_python(code_llm.generate(prompt))
+            
+        logger.info(f"exec_cell: thread_id={thread_id}, code to run:\n{code_to_run}\n--- end code ---\n\n")
+
+        # (1) Execute
+        stdout, stderr, display = kernel.exec_code(code_to_run, timeout_s=req.timeout_s)
+        if pip_log:
+            stderr = pip_log + "\n" + (stderr or "")
+            
+        logger.info(f"exec_cell: thread_id={thread_id}, initial exec stdout:\n{stdout}\n--- end stdout ---\n\n")
+
+        # (2b) Auto-repair
+        attempts_used = 0
+        code_to_run, stdout, stderr, display, attempts_used = self._maybe_repair_with_llm(
+            thread_id=thread_id,
+            req=req,
+            kernel=kernel,
+            code_llm=code_llm,
+            code=code_to_run,
+            stdout=stdout,
+            stderr=stderr,
+            display=display,
+        )
+
+        # (3) Artifact scan — outputs/ only
+        artifacts_after = self._artifact_index(run_dir, only_under=self.outputs_dirname)
+
+        # (4) Summarize & append Run Log (Run Log is never passed to any LLM)
+        summary = self._summarize_for_run_log(code_to_run, stdout, stderr)  # name retained; only used for text
+        
+        # only keep artifacts that were newly created in this cell
+        artifacts_after = [a for a in artifacts_after if a not in current_artifacts]
+        
+        self._append_run_step(
+            thread_id=thread_id,
+            tool_name="sandbox.exec",
+            task=req.task,
+            # attempts_used=attempts_used,
+            # final_code=code_to_run,
+            artifacts=artifacts_after,
+            evaluation_line="PENDING",
+        )
+
+        logger.info(f"exec_cell: thread_id={thread_id}, final code:\n{code_to_run}\n--- end code ---\n\n")
+
+        # (5) LLM evaluation (optional) — DO NOT pass Run Log content
+        verdict = None
+        eval_text = ""
+        output_summary = ""
+        code_artifact = {"name": "cell.py", "description": "The main code cell"}
+        artifacts_extra: List[Dict[str, Any]] = []
+
+        if eval_llm and req.task:
+            eval_prompt = self._build_eval_prompt(req.task, stdout, stderr, code_to_run, artifacts_after)
+            raw = eval_llm.generate(eval_prompt).strip()
+            try:
+                obj = self._extract_json_blob(raw)
+                verdict = (obj.get("verdict") or "").strip()
+                eval_text = (obj.get("eval") or "").strip()
+                output_summary = (obj.get("output_summary") or "").strip()
+                artifacts_extra = obj.get("artifacts") or []
+                code_artifact = (obj.get("code_artifact") or {})
+            except Exception as e:
+                verdict = f"FAIL — evaluator JSON parse error: {e}"
+                eval_text = "Evaluator did not return valid JSON."
+                output_summary = (stdout or "")[:800]
+                code_artifact = {"name": "cell.py", "description": "The main code cell"}
+                
+        self._update_last_eval_block(
+            thread_id=thread_id,
+            verdict=verdict or "NO EVALUATION",
+            eval_text=eval_text or (stderr or "")[:800],
+            output_summary=output_summary or (stdout or "")[:800],
+        )
+        
+        if verdict and isinstance(verdict, str) and verdict.upper().startswith("FAIL"):
+            ok = False
+        else:
+            ok = ("Traceback (most recent call last)" not in stderr) and ("[Sandbox] Timeout" not in stderr)
+
+        final_summary = output_summary or summary
+
+        # If there is error, we do not return the code that was run
+        if not ok:
+            code_to_run = None
+
+        code_obj = {
+            "name": code_artifact.get("name", "cell.py"),
+            "description": code_artifact.get("description", "The main code cell"),
+            "text": code_to_run or "",
+        }
+        
+        # Save the code to a file in run_dir for reference
+        code_file_path = run_dir / "codes" / code_obj["name"]
+        code_file_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            code_s3_path = self._s3_key_for(thread_id, f"codes/{code_obj['name']}")
+            code_file_path.write_text(code_obj["text"] or "", encoding="utf-8")
+            self.s3.put_file(
+                local_path=str(code_file_path),
+                key=code_s3_path,
+            )
+            code_obj["path"] = f"s3://{self.s3.bucket}/{code_s3_path}" if self.s3 else str(code_file_path)
+        except Exception as e:
+            logger.warning(f"Failed to write code file {code_file_path}: {e}")
+        
+        # (6) Sync artifacts (outputs/ only) to S3 and reduce to minimal surface (name, path, size)
+        files_out_minimal = self._sync_artifacts_to_s3(thread_id, artifacts_after)
+        
+        # Add the description for the artifacts if provided by the evaluator
+        if artifacts_extra:
+            extra_map = {a["name"]: a for a in artifacts_extra if "name" in a}
+            for f in files_out_minimal:
+                if f["name"] in extra_map and "description" in extra_map[f["name"]]:
+                    f["summary"] = extra_map[f["name"]]["description"]
+        
+        # Convert files_out_minimal to File objects if needed
+        files_out_minimal = [OutlineArtifact(**f) for f in files_out_minimal]
+
+        return ExecResult(
+            ok=ok,
+            code=code_obj,
+            stdout=stdout,
+            stderr=stderr,
+            display=display,
+            files_out=files_out_minimal,   # ONLY name, path (S3 or local), size
+            summary=final_summary,
+        )
+        
+        
+    def exec_cell_raw(
+        self,
+        thread_id: str,
+        req: ExecRequest,
+        code_llm: Optional[LLMClient] = None,
+        eval_llm: Optional[LLMClient] = None,
+    ) -> ExecResult:
+        """Execute a cell with optional LLM writer/evaluator and sync artifacts to S3 (outputs/ only).
+        NOTE: This version intentionally DOES NOT read or append any Run Log."""
+        if req.language.lower() != "python":
+            raise ValueError("Only Python is supported at the moment")
+        
+        logger.info(
+            "exec_cell(no-runlog): thread_id=%s, task=%s, code_len=%s, pip=%s, use_llm_writer=%s, repair_attempts=%s",
+            thread_id, req.task, (len(req.code) if req.code else 0), req.pip, req.use_llm_writer, req.repair_attempts
+        )
+
+        kernel = self.get_kernel(thread_id)
+        run_dir = self._run_dir(thread_id)
+        self._ensure_layout(thread_id)  # idempotent
+
+        # Ensure packages (if any)
+        pip_log = ""
+        if req.pip:
+            ok, pip_log = self.ensure_packages(req.pip)
+            if not ok:
+                pip_log = "[pip install failed]\n" + pip_log
+
+        # Require either raw code or an LLM writer
+        if not req.code and not req.use_llm_writer:
+            raise ValueError("No code provided and use_llm_writer is False")
+
+        # Snapshot current artifacts under outputs/
+        current_artifacts = self._artifact_index(run_dir, only_under=self.outputs_dirname)
+
+        # Determine code to run
+        if req.code:
+            code_to_run = _extract_python(req.code)
+        else:
+            # Minimal context (no Run Log, no Artifact Log)
+            ns_keys = sorted([k for k in list(kernel.globals.keys()) if not k.startswith("__")])
+            preview = f"Namespace keys: {ns_keys[:50]}"
+            # Lightweight writer prompt with just the task + brief context
+            prompt = (
+                "Write ONE Python cell to accomplish the task.\n"
+                "Do not validate file paths; assume referenced files exist if the task implies them.\n"
+                "Only stdout is captured. Use print(...) to show all outputs.\n"
+                "Output ONLY raw Python code (no markdown fences).\n\n"
+                f"Task:\n{req.task}\n\n"
+                f"Preview of namespace/files:\n{preview}\n"
+            )
+            code_to_run = _extract_python(code_llm.generate(prompt)) if code_llm else ""
+
+        logger.info("exec_cell(no-runlog): thread_id=%s, code to run:\n%s\n--- end code ---\n", thread_id, code_to_run)
+
+        # Execute
+        stdout, stderr, display = kernel.exec_code(code_to_run, timeout_s=req.timeout_s)
+        if pip_log:
+            stderr = pip_log + "\n" + (stderr or "")
+        logger.info("exec_cell(no-runlog): initial exec stdout:\n%s\n--- end stdout ---\n", stdout)
+
+        # Auto-repair (optional)
+        attempts_used = 0
+        code_to_run, stdout, stderr, display, attempts_used = self._maybe_repair_with_llm(
+            thread_id=thread_id,
+            req=req,
+            kernel=kernel,
+            code_llm=code_llm,
+            code=code_to_run,
+            stdout=stdout,
+            stderr=stderr,
+            display=display,
+        )
+
+        # Artifact scan — outputs/ only, keep only newly created
+        artifacts_after = self._artifact_index(run_dir, only_under=self.outputs_dirname)
+        artifacts_after = [a for a in artifacts_after if a not in current_artifacts]
+
+        # Build a lightweight summary (name retained but not used for any log)
+        summary = self._summarize_for_run_log(code_to_run, stdout, stderr)
+
+        logger.info("exec_cell(no-runlog): final code after repair:\n%s\n--- end code ---\n", code_to_run)
+
+        # Optional evaluation (no Run Log used or written)
+        verdict = None
+        eval_text = ""
+        output_summary = ""
+        code_artifact = {"name": "cell.py", "description": "The main code cell"}
+        artifacts_extra: List[Dict[str, Any]] = []
+
+        if eval_llm and req.task:
+            eval_prompt = self._build_eval_prompt(req.task, stdout, stderr, code_to_run, artifacts_after)
+            raw = eval_llm.generate(eval_prompt).strip()
+            try:
+                obj = self._extract_json_blob(raw)
+                verdict = (obj.get("verdict") or "").strip()
+                eval_text = (obj.get("eval") or "").strip()
+                output_summary = (obj.get("output_summary") or "").strip()
+                artifacts_extra = obj.get("artifacts") or []
+                code_artifact = (obj.get("code_artifact") or {}) or code_artifact
+            except Exception as e:
+                verdict = f"FAIL — evaluator JSON parse error: {e}"
+                eval_text = "Evaluator did not return valid JSON."
+                output_summary = (stdout or "")[:800]
+                # keep default code_artifact
+
+        # Determine ok status (no log writes)
+        if verdict and isinstance(verdict, str) and verdict.upper().startswith("FAIL"):
+            ok = False
+        else:
+            ok = ("Traceback (most recent call last)" not in (stderr or "")) and ("[Sandbox] Timeout" not in (stderr or ""))
+
+        final_summary = output_summary or summary
+
+        # Hide executed code when error
+        code_text_to_save = code_to_run if ok else ""
+
+        code_obj = {
+            "name": code_artifact.get("name", "cell.py"),
+            "description": code_artifact.get("description", "The main code cell"),
+            "text": code_text_to_save or "",
+        }
+
+        # Save executed code file (for provenance), then upload to S3
+        code_file_path = run_dir / "codes" / code_obj["name"]
+        code_file_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            code_s3_path = self._s3_key_for(thread_id, f"codes/{code_obj['name']}")
+            code_file_path.write_text(code_obj["text"], encoding="utf-8")
+            self.s3.put_file(local_path=str(code_file_path), key=code_s3_path)
+            code_obj["path"] = f"s3://{self.s3.bucket}/{code_s3_path}" if self.s3 else str(code_file_path)
+        except Exception as e:
+            logger.warning("Failed to write code file %s: %s", code_file_path, e)
+
+        # Sync artifacts (outputs/ only) to S3 and reduce to minimal surface (name, path, size)
+        files_out_minimal = self._sync_artifacts_to_s3(thread_id, artifacts_after)
+
+        # Merge optional evaluator-provided descriptions
+        if artifacts_extra:
+            extra_map = {a["name"]: a for a in artifacts_extra if "name" in a}
+            for f in files_out_minimal:
+                if f["name"] in extra_map and "description" in extra_map[f["name"]]:
+                    f["summary"] = extra_map[f["name"]]["description"] 
+
+        files_out_minimal = [OutlineArtifact(**f) for f in files_out_minimal]
+
+        return ExecResult(
+            ok=ok,
+            code=code_obj,
+            stdout=stdout,
+            stderr=stderr,
+            display=display,
+            files_out=files_out_minimal,
+            summary=final_summary,
+        )
+
+
+    # ---------- Helpers ----------
+    def _inputs_summary(self, req: ExecRequest, writer_note: Optional[str]) -> str:
+        fields = {
+            "language": req.language,
+            "timeout_s": req.timeout_s,
+            "task": (req.task[:200] + "…") if req.task else None,
+            "writer": writer_note,
+        }
+        fields = {k: v for k, v in fields.items() if v is not None}
+        return json.dumps(fields)
+
+    def _summarize_for_run_log(self, code: str, stdout: str, stderr: str) -> str:
+        # Retain the function name for compatibility; used only for local text summary
+        code_snip = (code or "").strip()
+        code_snip = (code_snip[:400] + "…") if len(code_snip) > 400 else code_snip
+        out_snip = (stdout[:400] + "…") if len(stdout) > 400 else stdout
+        err_snip = (stderr[:200] + "…") if len(stderr) > 200 else stderr
+        parts = ["Code:\n" + code_snip]
+        if out_snip:
+            parts.append("STDOUT:\n" + out_snip)
+        if err_snip:
+            parts.append("STDERR:\n" + err_snip)
+        return "\n\n".join(parts)

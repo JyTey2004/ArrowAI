@@ -1,23 +1,26 @@
 // src/components/layout/MainLayout.tsx
 import React, { useEffect } from 'react';
-import { Routes, Route, Navigate, useParams, useNavigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useParams, useNavigate, useLocation } from 'react-router-dom';
 import styled from 'styled-components';
 import { Sidebar } from '../sidebar/Sidebar';
 import { ChatInterface } from '../chat/ChatInterface';
 import { useChat } from '../../contexts/ChatContext';
+import LandingPage from '../landing/LandingPage';
 
-const LayoutContainer = styled.div`
+const LayoutContainer = styled.div<{ $hasSidebar: boolean }>`
   display: flex;
   height: 100vh;
   width: 100%;
   background: ${props => props.theme.background};
+  justify-content: ${props => (props.$hasSidebar ? 'flex-start' : 'center')};
 `;
 
-const ContentArea = styled.div`
+const ContentArea = styled.div<{ $hasSidebar: boolean }>`
   flex: 1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  max-width: ${props => (props.$hasSidebar ? 'none' : '100%')};
 `;
 
 // Wrapper component to handle chat loading by UUID
@@ -58,26 +61,6 @@ const ChatWrapper: React.FC = () => {
   }
 
   return <ChatInterface />;
-};
-
-// Home page component
-const HomePage: React.FC = () => {
-  return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      height: '100%',
-      flexDirection: 'column',
-      gap: '20px',
-      padding: '40px'
-    }}>
-      <h1 style={{ fontSize: '32px', fontWeight: 600 }}>Welcome to ArrowAI</h1>
-      <p style={{ fontSize: '16px', color: '#64748b', textAlign: 'center', maxWidth: '500px' }}>
-        Start a new conversation or select a recent chat from the sidebar.
-      </p>
-    </div>
-  );
 };
 
 // Archive page component
@@ -141,12 +124,15 @@ const SettingsPage: React.FC = () => {
 };
 
 export const MainLayout: React.FC = () => {
+  const location = useLocation();
+  const isHomeRoute = location.pathname === '/';
+
   return (
-    <LayoutContainer>
-      <Sidebar />
-      <ContentArea>
+    <LayoutContainer $hasSidebar={!isHomeRoute}>
+      {!isHomeRoute && <Sidebar />}
+      <ContentArea $hasSidebar={!isHomeRoute}>
         <Routes>
-          <Route path="/" element={<HomePage />} />
+          <Route path="/" element={<LandingPage />} />
           <Route path="/archive" element={<ArchivePage />} />
           <Route path="/chat/:chatId" element={<ChatWrapper />} />
           <Route path="/profile" element={<ProfilePage />} />
