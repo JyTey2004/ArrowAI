@@ -1,6 +1,9 @@
 ## Today todo
 
 ### UI
+1. Make a better explanation for use case in website - Somewhat done
+2. Finalized website
+3. Allow enterprise customers to provide the research/data that wants to verify the outputs produced by AI
 
 ### MCP
 
@@ -10,16 +13,14 @@
 
 ### NEW
 
+# Business
+1. Make competitive advantage stronger - Highlight this case explain why other companies are not doing it
+2. Explore different ways in which we can integrate frameworks - libraries and tools that can be integrated
 
 
 ### Future 
-1. Make a better explanation for use case in website
-2. Make competitive advantage stronger - Highlight this case explain why other companies are not doing it
-3. Explore different ways in which we can integrate frameworks - libraries and tools that can be integrated in the platform
-4. Finalized website
-5. Research on multi-language localization 
-6. Allow enterprise customers to provide the research/data that wants to verify the outputs produced by AI
-7 Talk to potential customers to understand their needs and pain points
+1. Research on multi-language localization 
+2. Talk to potential customers to understand their needs and pain points
     - Consulting firms
     - Market research firms
     - Financial firms

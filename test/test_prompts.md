@@ -16,4 +16,4 @@
 
 ## Consulting Project Management
 
-1. Analyze the sales and target files to identify any discrepancies between projected and actual sales figures. Based on your analysis, suggest three project management strategies that could help align future sales performance with targets and provide relevant case studies or articles to support these strategies. Write 3 slides to summarize your findings and recommendations.
+1. Analyze the sales and target files to identify any discrepancies between projected and actual sales figures. Based on your analysis, suggest three project management strategies that could help align future sales performance with targets and provide relevant case studies or articles to support these strategies.

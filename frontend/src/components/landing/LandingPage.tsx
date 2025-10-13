@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
 import {
@@ -10,9 +10,11 @@ import {
   Play,
   ShieldCheck,
   Sparkles,
-  Zap,
   Globe,
-  Lock,
+  Divide,
+  FileChartLine,
+  SquareCheck,
+  ExternalLink
 } from 'lucide-react';
 import { useChat } from '../../contexts/ChatContext';
 import gsap from 'gsap';
@@ -43,12 +45,10 @@ const FloatingNav = styled.nav`
   align-items: center;
   justify-content: space-between;
   padding: 16px 32px;
-  max-width: 1200px;
-  width: min(calc(100% - clamp(24px, 6vw, 60px) * 2), 1200px);
+  width: min(calc(100% - clamp(24px, 6vw, 60px) * 2));
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0.08));
   backdrop-filter: blur(26px) saturate(200%);
-  border: 1px solid rgba(255, 255, 255, 0.32);
-  border-radius: 18px;
+  border-radius: 50px;
   box-shadow:
     0 18px 48px rgba(15, 23, 42, 0.18),
     inset 0 1px 0 rgba(255, 255, 255, 0.45),
@@ -163,12 +163,12 @@ const PrimaryButton = styled.button`
 const HeroSection = styled.section`
   position: relative;
   width: 100%;
-  height: 100vh;
+  height: auto;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  padding: 0 60px;
+  padding: 20vh 60px 10vh 60px;
   background: linear-gradient(180deg, #f1f3f6 0%, #e4e6ed 100%);
 
   &::before {
@@ -186,6 +186,68 @@ const HeroSection = styled.section`
   @media (max-width: 768px) {
     padding: 0 24px;
   }
+`;
+
+const HeroFeatureBoxes = styled.div`
+  display: flex;
+  gap: 24px;
+  margin-top: 48px;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+
+  @media (max-width: 768px) {
+    justify-content: center;
+  }
+`;
+
+const FeatureBox = styled.div`
+  position: relative;
+  padding: 20px 24px;
+  padding-left: 32px;
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px) saturate(180%);
+  border: 1px solid rgba(99, 102, 241, 0.15);
+  border-radius: 12px;
+  transition: all 0.3s ease;
+  max-width: 280px;
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: linear-gradient(180deg, #6366f1, #8b5cf6);
+    border-radius: 12px 0 0 12px;
+  }
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(99, 102, 241, 0.3);
+    transform: translateY(-2px);
+  }
+
+  @media (max-width: 768px) {
+    max-width: 100%;
+  }
+`;
+
+const FeatureBoxTitle = styled.div`
+  font-size: 18px;
+  font-weight: 600;
+  color: #1a1a2e;
+  margin-bottom: 6px;
+  font-family: 'Casual', 'Inter', 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  letter-spacing: 0.5px;
+`;
+
+const FeatureBoxDescription = styled.div`
+  font-size: 14px;
+  color: #4b5563;
+  line-height: 1.5;
+  font-family: inherit;
+  letter-spacing: -0.2px;
 `;
 
 const DotCanvas = styled.canvas`
@@ -252,8 +314,8 @@ const HeroTitle = styled.h1`
 
 const HeroSubtitle = styled.p`
   font-size: clamp(17px, 2vw, 21px);
-  color: #4b5563;
-  line-height: 1.65;
+  color: #1d1f21ff;
+  line-height: 1.5;
   margin-bottom: 48px;
   max-width: 620px;
   margin-left: 0;
@@ -297,7 +359,7 @@ interface FullWidthSectionProps {
 
 const FullWidthSection = styled.section<FullWidthSectionProps>`
   width: 100%;
-  padding: 120px 60px;
+  padding: 120px 30px;
   background: ${props => (props.$isDark ? '#f9fafb' : '#ffffff')};
 
   @media (max-width: 768px) {
@@ -307,7 +369,7 @@ const FullWidthSection = styled.section<FullWidthSectionProps>`
 
 const SectionHeader = styled.div`
   max-width: 800px;
-  margin: 0 auto 80px;
+  margin: 0 auto 40px;
   text-align: center;
 `;
 
@@ -392,7 +454,7 @@ const StickyContainer = styled.div`
 const VideoCanvas = styled.canvas`
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 `;
 
 const FeatureTextOverlay = styled.div`
@@ -586,6 +648,343 @@ const TransparentButton = styled(PrimaryButton)`
   }
 `;
 
+const VideoShowcaseSection = styled(FullWidthSection)`
+  background: #ffffff;
+  padding: 120px 60px;
+
+  @media (max-width: 968px) {
+    padding: 80px 24px;
+  }
+`;
+
+const ShowcaseContainer = styled.div`
+  max-width: 1400px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 60px;
+  align-items: start;
+
+  @media (max-width: 968px) {
+    grid-template-columns: 1fr;
+    gap: 40px;
+  }
+`;
+
+const VideoContainer = styled.div`
+  position: sticky;
+  top: 120px;
+  width: 100%;
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+  background: #000000;
+
+  @media (max-width: 968px) {
+    position: relative;
+    top: 0;
+  }
+`;
+
+const VideoPlayer = styled.video`
+  width: 100%;
+  height: auto;
+  display: block;
+`;
+
+const FeaturesColumn = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  padding: 20px 0;
+`;
+
+const FeatureShowcaseCard = styled.div`
+  padding: 40px;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 16px;
+  transition: all 0.4s ease;
+  opacity: 0.4;
+  transform: translateY(20px);
+
+  &.active {
+    opacity: 1;
+    transform: translateY(0);
+    border-color: #6366f1;
+    background: rgba(255, 255, 255, 0.95);
+    box-shadow: 0 10px 40px rgba(99, 102, 241, 0.2);
+  }
+
+  &:hover {
+    border-color: #6366f1;
+    transform: translateY(-5px);
+    box-shadow: 0 10px 30px rgba(99, 102, 241, 0.15);
+  }
+`;
+
+const FeatureNumber = styled.div`
+  display: inline-block;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: white;
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+`;
+
+const CaseStudiesSection = styled(FullWidthSection)`
+  background: linear-gradient(180deg, #f9fafb 0%, #ffffff 100%);
+`;
+
+const CaseStudiesGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+  gap: 32px;
+  max-width: 1400px;
+  margin: 0 auto 80px;
+
+  @media (max-width: 768px) {
+    grid-template-columns: 1fr;
+  }
+`;
+
+const CaseStudyCard = styled.div`
+  padding: 40px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #ef4444, #f59e0b);
+  }
+
+  &:hover {
+    border-color: #ef4444;
+    transform: translateY(-5px);
+    box-shadow: 0 20px 40px rgba(239, 68, 68, 0.15);
+  }
+`;
+
+const CaseStudyLabel = styled.div`
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 6px;
+  color: #ef4444;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 20px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+`;
+const CaseStudyLinks = styled.div`
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #e5e7eb;
+`;
+
+const LinksLabel = styled.div`
+  font-size: 12px;
+  color: #9ca3af;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px;
+`;
+
+const LinksList = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+`;
+
+const CaseStudyLink = styled.a`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #6366f1;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  padding: 6px 0;
+  
+  &:hover {
+    color: #4f46e5;
+    transform: translateX(4px);
+  }
+
+  svg {
+    flex-shrink: 0;
+  }
+`;
+
+const LinkText = styled.span`
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+`;
+
+const CaseStudyTitle = styled.h3`
+  font-size: 22px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: #1a1a2e;
+  font-family: inherit;
+  letter-spacing: -0.5px;
+  line-height: 1.3;
+`;
+
+const CaseStudyDescription = styled.p`
+  font-size: 15px;
+  color: #6b7280;
+  line-height: 1.7;
+  margin-bottom: 24px;
+  font-family: inherit;
+  letter-spacing: -0.2px;
+`;
+
+const CaseStudyImpact = styled.div`
+  padding: 20px;
+  background: #f9fafb;
+  border-radius: 12px;
+  border-left: 3px solid #ef4444;
+`;
+
+const ImpactLabel = styled.div`
+  font-size: 12px;
+  color: #9ca3af;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+`;
+
+const ImpactValue = styled.div`
+  font-size: 16px;
+  color: #1a1a2e;
+  font-weight: 600;
+  line-height: 1.5;
+`;
+
+const SolutionShowcase = styled.div`
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 60px 40px;
+  background: linear-gradient(135deg, #1a1a2e 0%, #2d2d44 100%);
+  border-radius: 20px;
+  position: relative;
+  overflow: hidden;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    right: -50%;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, transparent 70%);
+  }
+
+  @media (max-width: 768px) {
+    padding: 40px 24px;
+  }
+`;
+
+const SolutionContent = styled.div`
+  position: relative;
+  z-index: 2;
+  text-align: center;
+`;
+
+const SolutionTitle = styled.h3`
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 700;
+  color: white;
+  margin-bottom: 24px;
+  font-family: 'Casual', 'Inter', 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  letter-spacing: -1px;
+`;
+
+const SolutionSubtitle = styled.p`
+  font-size: 18px;
+  color: rgba(255, 255, 255, 0.85);
+  line-height: 1.7;
+  margin-bottom: 48px;
+  max-width: 800px;
+  margin-left: auto;
+  margin-right: auto;
+`;
+
+const SolutionFeaturesGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 24px;
+  margin-top: 40px;
+`;
+
+const SolutionFeatureBox = styled.div`
+  padding: 32px 24px;
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 16px;
+  text-align: left;
+  transition: all 0.3s ease;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(99, 102, 241, 0.4);
+    transform: translateY(-5px);
+  }
+`;
+
+const SolutionFeatureIcon = styled.div`
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+`;
+
+const SolutionFeatureTitle = styled.div`
+  font-size: 16px;
+  font-weight: 600;
+  color: white;
+  margin-bottom: 8px;
+  letter-spacing: -0.3px;
+`;
+
+const SolutionFeatureDescription = styled.div`
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.6;
+  letter-spacing: -0.2px;
+`;
+
 const DotGrid: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -604,7 +1003,7 @@ const DotGrid: React.FC = () => {
     };
 
     const dots: Dot[] = [];
-    const spacing = 20;
+    const spacing = 30;
 
     const resizeCanvas = () => {
       const { clientWidth, clientHeight } = canvas;
@@ -674,32 +1073,51 @@ const features = [
   {
     icon: <BrainCircuit size={28} />,
     title: 'Multi-Agent Orchestration',
-    description: 'Coordinated AI specialists handle code generation, research analysis, content creation, and presentation design simultaneously.'
+    description: 'Coordinated AI specialists handle code generation, research analysis, content creation, and presentation design simultaneously.',
+    startTime: 0,
+    endTime: 10
   },
   {
     icon: <Layers size={28} />,
     title: 'Unified Knowledge Layer',
-    description: 'Every artifact, decision, and insight flows through a synchronized context engine that keeps all agents aligned.'
+    description: 'Every artifact, decision, and insight flows through a synchronized context engine that keeps all agents aligned.',
+    startTime: 10,
+    endTime: 20
   },
   {
-    icon: <ShieldCheck size={28} />,
-    title: 'Enterprise-Grade Security',
-    description: 'End-to-end encryption, audit trails, and compliance controls ensure your data stays protected at every layer.'
+    icon: <Divide size={28} />,
+    title: 'Divide and Conquer',
+    description: 'Break complex projects into manageable tasks, assign them to the right agents, and watch them execute flawlessly.',
+    startTime: 20,
+    endTime: 30
   },
   {
-    icon: <Zap size={28} />,
-    title: 'Real-Time Execution',
-    description: 'Watch your workflows come to life with live status updates, progress tracking, and instant artifact generation.'
+    icon: <FileChartLine size={28} />,
+    title: 'Data-Driven Approach',
+    description: 'Integrate your data sources and let agents analyze, visualize, and derive insights to inform every step of the project.',
+    startTime: 30,
+    endTime: 120
   },
   {
     icon: <Globe size={28} />,
-    title: 'Global Infrastructure',
-    description: 'Deploy across multiple regions with automatic failover and edge optimization for lightning-fast performance.'
+    title: 'Research and fact-checking',
+    description: 'Agents autonomously gather information from the web, validate sources, and ensure all outputs are accurate and up-to-date.',
+    startTime: 120,
+    endTime: 150
   },
   {
-    icon: <Lock size={28} />,
-    title: 'Access Control',
-    description: 'Granular permissions, role-based access, and team management built for organizations of any size.'
+    icon: <Sparkles size={28} />,
+    title: 'Creative Content Generation',
+    description: 'From drafting reports to designing presentations, specialized agents craft high-quality content tailored to your audience.',
+    startTime: 150,
+    endTime: 180
+  },
+  {
+    icon: <SquareCheck size={28} />,
+    title: 'Evaluation and Quality Control',
+    description: 'All outputs undergo rigorous evaluation by specialized agents to ensure they meet your standards and objectives.',
+    startTime: 180,
+    endTime: 200
   }
 ];
 
@@ -718,204 +1136,278 @@ const demoHighlights = [
   }
 ];
 
+const caseStudies = [
+  {
+    label: 'Healthcare',
+    title: 'Medical AI Diagnostic System Faces Regulatory Scrutiny',
+    description: 'A hospital\'s AI diagnostic tool made critical treatment recommendations, but auditors couldn\'t verify the reasoning process. Without execution logs, the hospital faced potential liability and had to suspend the system.',
+    impact: 'System suspended for 6 months, $2.3M in compliance costs',
+    links: [
+      'https://www.statnews.com/2018/07/25/ibm-watson-recommended-unsafe-incorrect-treatments/',
+      'https://jamanetwork.com/journals/jamainternalmedicine/fullarticle/2781307',
+      'https://www.fda.gov/medical-devices/software-medical-device-samd/transparency-machine-learning-enabled-medical-devices-guiding-principles'
+    ]
+  },
+  {
+    label: 'Financial Services',
+    title: 'Bank\'s Credit Scoring AI Under Investigation',
+    description: 'Regulators questioned potential bias in loan approvals. The bank couldn\'t produce decision trails or data provenance, resulting in fines and mandated system overhaul.',
+    impact: '$15M penalty, 18-month remediation project',
+    links: [
+      'https://www.dfs.ny.gov/reports_and_publications/202103_report_apple_card_investigation',
+      'https://www.consumerfinance.gov/compliance/circulars/circular-2022-03-adverse-action-notification-requirements-in-connection-with-credit-decisions-based-on-complex-algorithms/',
+      'https://www.consumerfinance.gov/about-us/newsroom/cfpb-issues-guidance-on-credit-denials-by-lenders-using-artificial-intelligence/'
+    ]
+  },
+  {
+    label: 'Legal Tech',
+    title: 'Contract Analysis AI Creates Legal Exposure',
+    description: 'A law firm\'s AI missed critical clauses in multi-million dollar contracts. Without audit trails of what the AI analyzed and why, the firm couldn\'t defend their due diligence process.',
+    impact: 'Malpractice claim, loss of major client accounts',
+    links: [
+      'https://law.justia.com/cases/federal/district-courts/new-york/nysdce/1%3A2022cv01461/575368/54/',
+      'https://www.goldbergsegalla.com/app/uploads/2023/10/Fake-Cases-Real-Consequences-Misuse-of-ChatGPT-Christoper-F.-Lyon-NY-Litigator.pdf'
+    ]
+  }
+];
+
+
+const solutionFeatures = [
+  {
+    icon: <BarChart3 size={24} />,
+    title: 'Complete Orchestration Logs',
+    description: 'Every agent interaction, decision point, and workflow step recorded with timestamps'
+  },
+  {
+    icon: <MessageSquare size={24} />,
+    title: 'Code & Execution Traces',
+    description: 'Full code generated, evaluation results, and runtime metadata captured automatically'
+  },
+  {
+    icon: <ShieldCheck size={24} />,
+    title: 'Data Provenance Tracking',
+    description: 'Source attribution, data transformations, and lineage for every insight produced'
+  },
+  {
+    icon: <Layers size={24} />,
+    title: 'Versioned Artifacts',
+    description: 'Complete history of outputs with rollback capabilities and change tracking'
+  }
+];
+
 const LandingPage: React.FC = () => {
   const navigate = useNavigate();
   const { addNewChat, activeChat } = useChat();
   const featuresRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [activeFeatureIndex, setActiveFeatureIndex] = useState(0);
 
+  // Video progress tracking
   useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            entry.target.classList.add('animate-in');
-          }
-        });
-      },
-      { threshold: 0.2 }
-    );
+    const video = videoRef.current;
+    if (!video) return;
 
-    const featureRows = featuresRef.current?.querySelectorAll('[data-feature-row]');
-    featureRows?.forEach((row) => observer.observe(row));
+    const handleTimeUpdate = () => {
+      const currentTime = video.currentTime;
 
-    return () => observer.disconnect();
-  }, []);
-
-
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const sectionRef = useRef<HTMLDivElement>(null);
-
-  const frameCount = 226; // The total number of image frames
-  const SCROLL_MULTIPLIER = 3; // try 2–5
-
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const sectionEl = sectionRef.current;
-    if (!canvas || !sectionEl) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // --- helpers: find actual scroll container & relative offsets ---
-    const isScrollable = (el: Element) => {
-      const s = getComputedStyle(el);
-      return /(auto|scroll)/.test(s.overflowY) || /(auto|scroll)/.test(s.overflow);
-    };
-    const getScrollParent = (el: Element | null): HTMLElement | null => {
-      let p = el?.parentElement || null;
-      while (p && p !== document.body && p !== document.documentElement) {
-        if (isScrollable(p)) return p as HTMLElement;
-        p = p.parentElement;
-      }
-      // if body/html are the scroller, return null (means window)
-      return null;
-    };
-    const getOffsetTopWithin = (el: HTMLElement, root: HTMLElement): number => {
-      let y = 0;
-      let n: HTMLElement | null = el;
-      while (n && n !== root) {
-        y += n.offsetTop;
-        n = n.offsetParent as HTMLElement | null;
-      }
-      return y;
-    };
-
-    // find the real scroller (null => window)
-    const scrollerEl = getScrollParent(sectionEl);
-    const useWindow = !scrollerEl;
-
-    const dpr = window.devicePixelRatio || 1;
-    const frame = { current: 0 };
-
-    // base path safe URLs
-    const base =
-      (import.meta as any)?.env?.BASE_URL ||
-      (typeof process !== 'undefined' ? (process as any).env?.PUBLIC_URL : '') ||
-      '';
-    const urlFor = (n: number) => `${base}/frames/frame_${String(n).padStart(4, '0')}.jpg`;
-
-    // preload images
-    const images: HTMLImageElement[] = new Array(frameCount);
-    const loadImages = () =>
-      Promise.all(
-        Array.from({ length: frameCount }, (_, i) => {
-          const img = new Image();
-          const url = urlFor(i + 1);
-          images[i] = img;
-          return new Promise<void>((resolve) => {
-            img.onload = () => resolve();
-            img.onerror = () => {
-              console.warn('[frames] failed to load:', url);
-              resolve();
-            };
-            img.src = url;
-          });
-        })
+      // Find which feature should be active based on current time
+      const activeIndex = features.findIndex(
+        (feature) => currentTime >= feature.startTime && currentTime < feature.endTime
       );
 
-    const sizeCanvas = () => {
-      const cssW = canvas.clientWidth || 1920;
-      const cssH = canvas.clientHeight || 1080;
-      canvas.width = cssW * dpr;
-      canvas.height = cssH * dpr;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-
-    const draw = () => {
-      const idx = Math.floor(frame.current);
-      const img = images[idx];
-      if (!img || !img.complete || !img.naturalWidth) return;
-      const w = canvas.clientWidth || 1920;
-      const h = canvas.clientHeight || 1080;
-      ctx.clearRect(0, 0, w, h);
-      ctx.drawImage(img, 0, 0, w, h);
-    };
-
-    // manual progress relative to the real scroller
-    const manualProgress = () => {
-      if (useWindow) {
-        const rect = sectionEl.getBoundingClientRect();
-        const vh = window.innerHeight;
-        const total = (rect.height - vh) * SCROLL_MULTIPLIER; if (total <= 0) return 0;
-        // how far the viewport top is past the section top
-        const passed = -rect.top; // negative until section top crosses viewport top
-        const p = Math.min(Math.max(passed / total, 0), 1);
-        return p;
-      } else {
-        const vh = scrollerEl!.clientHeight;
-        const sectionTop = getOffsetTopWithin(sectionEl, scrollerEl!);
-        const scrollTop = scrollerEl!.scrollTop;
-        const rel = scrollTop - sectionTop; // <0 before reaching the section
-        const total = (sectionEl.offsetHeight - vh) * SCROLL_MULTIPLIER;
-        if (total <= 0) return 0;
-        const p = Math.min(Math.max(rel / total, 0), 1);
-        return p;
+      // If a valid feature is found, set it as active, otherwise keep the last one
+      if (activeIndex !== -1) {
+        setActiveFeatureIndex(activeIndex);
       }
     };
 
-    // clean slate
-    ScrollTrigger.getAll().forEach(t => t.kill());
-    sizeCanvas();
-
-    loadImages().then(() => {
-      // draw first available
-      let first = 0;
-      for (let i = 0; i < frameCount; i++) {
-        if (images[i]?.complete && images[i].naturalWidth) { first = i; break; }
-      }
-      frame.current = first;
-      draw();
-
-      // ScrollTrigger (now pointing at the correct scroller)
-      const stCfg: any = {
-        trigger: sectionEl,
-        start: 'top top',
-        end: () =>
-          '+=' + ((useWindow ? window.innerHeight : scrollerEl!.clientHeight) * SCROLL_MULTIPLIER * 2), // longer distance
-        scrub: true,
-        // markers: true,
-        onUpdate: (self: ScrollTrigger) => {
-          const idx = Math.min(frameCount - 1, Math.floor(self.progress * (frameCount - 1)));
-          if (idx !== frame.current) { frame.current = idx; draw(); }
-        },
-      };
-      if (!useWindow) stCfg.scroller = scrollerEl;
-      ScrollTrigger.create(stCfg);
-
-      // manual fallback (also drives frames; harmless to run alongside ST)
-      const onScroll = () => {
-        const p = manualProgress();
-        const idx = Math.min(frameCount - 1, Math.floor(p * (frameCount - 1)));
-        if (idx !== frame.current) {
-          frame.current = idx;
-          draw();
-        }
-      };
-
-      const scrollTarget: any = useWindow ? window : scrollerEl!;
-      scrollTarget.addEventListener('scroll', onScroll, { passive: true });
-
-      const onResize = () => {
-        sizeCanvas();
-        draw();
-        ScrollTrigger.refresh();
-        onScroll();
-      };
-      window.addEventListener('resize', onResize);
-
-      // initial sync
-      ScrollTrigger.refresh();
-      onScroll();
-
-      return () => {
-        ScrollTrigger.getAll().forEach(t => t.kill());
-        scrollTarget.removeEventListener('scroll', onScroll);
-        window.removeEventListener('resize', onResize);
-      };
-    });
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    video.addEventListener('timeupdate', handleTimeUpdate);
+    return () => video.removeEventListener('timeupdate', handleTimeUpdate);
   }, []);
+
+
+  // const canvasRef = useRef<HTMLCanvasElement>(null);
+  // const sectionRef = useRef<HTMLDivElement>(null);
+
+  // const frameCount = 226; // The total number of image frames
+  // const SCROLL_MULTIPLIER = 1; // try 2–5
+
+
+  // useEffect(() => {
+  //   const canvas = canvasRef.current;
+  //   const sectionEl = sectionRef.current;
+  //   if (!canvas || !sectionEl) return;
+  //   const ctx = canvas.getContext('2d');
+  //   if (!ctx) return;
+
+  //   // --- helpers: find actual scroll container & relative offsets ---
+  //   const isScrollable = (el: Element) => {
+  //     const s = getComputedStyle(el);
+  //     return /(auto|scroll)/.test(s.overflowY) || /(auto|scroll)/.test(s.overflow);
+  //   };
+  //   const getScrollParent = (el: Element | null): HTMLElement | null => {
+  //     let p = el?.parentElement || null;
+  //     while (p && p !== document.body && p !== document.documentElement) {
+  //       if (isScrollable(p)) return p as HTMLElement;
+  //       p = p.parentElement;
+  //     }
+  //     // if body/html are the scroller, return null (means window)
+  //     return null;
+  //   };
+  //   const getOffsetTopWithin = (el: HTMLElement, root: HTMLElement): number => {
+  //     let y = 0;
+  //     let n: HTMLElement | null = el;
+  //     while (n && n !== root) {
+  //       y += n.offsetTop;
+  //       n = n.offsetParent as HTMLElement | null;
+  //     }
+  //     return y;
+  //   };
+
+  //   // find the real scroller (null => window)
+  //   const scrollerEl = getScrollParent(sectionEl);
+  //   const useWindow = !scrollerEl;
+
+  //   const dpr = window.devicePixelRatio || 1;
+  //   const frame = { current: 0 };
+
+  //   // base path safe URLs
+  //   const base =
+  //     (import.meta as any)?.env?.BASE_URL ||
+  //     (typeof process !== 'undefined' ? (process as any).env?.PUBLIC_URL : '') ||
+  //     '';
+  //   const urlFor = (n: number) => `${base}/frames/frame_${String(n).padStart(4, '0')}.jpg`;
+
+  //   // preload images
+  //   const images: HTMLImageElement[] = new Array(frameCount);
+  //   const loadImages = () =>
+  //     Promise.all(
+  //       Array.from({ length: frameCount }, (_, i) => {
+  //         const img = new Image();
+  //         const url = urlFor(i + 1);
+  //         images[i] = img;
+  //         return new Promise<void>((resolve) => {
+  //           img.onload = () => resolve();
+  //           img.onerror = () => {
+  //             console.warn('[frames] failed to load:', url);
+  //             resolve();
+  //           };
+  //           img.src = url;
+  //         });
+  //       })
+  //     );
+
+  //   const sizeCanvas = () => {
+  //     const cssW = canvas.clientWidth || 1920;
+  //     const cssH = canvas.clientHeight || 1080;
+  //     canvas.width = cssW * dpr;
+  //     canvas.height = cssH * dpr;
+  //     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  //   };
+
+  //   const draw = () => {
+  //     const idx = Math.floor(frame.current);
+  //     const img = images[idx];
+  //     if (!img || !img.complete || !img.naturalWidth) return;
+  //     const w = canvas.clientWidth || 1920;
+  //     const h = canvas.clientHeight || 1080;
+  //     ctx.clearRect(0, 0, w, h);
+  //     ctx.drawImage(img, 0, 0, w, h);
+  //   };
+
+  //   // manual progress relative to the real scroller
+  //   const manualProgress = () => {
+  //     // recompute current dims each time (in case of resize)
+  //     const vhNow = useWindow ? window.innerHeight : scrollerEl!.clientHeight;
+  //     const realNow = sectionEl.offsetHeight - vhNow;
+  //     const virtualNow = Math.max(0, realNow * SCROLL_MULTIPLIER);
+
+  //     if (useWindow) {
+  //       const rect = sectionEl.getBoundingClientRect();
+  //       const passed = Math.min(Math.max(-rect.top, 0), virtualNow); // clamp 0..virtual
+  //       return virtualNow ? passed / virtualNow : 0;
+  //     } else {
+  //       const sectionTop = getOffsetTopWithin(sectionEl, scrollerEl!);
+  //       const rel = Math.min(Math.max(scrollerEl!.scrollTop - sectionTop, 0), virtualNow);
+  //       return virtualNow ? rel / virtualNow : 0;
+  //     }
+  //   };
+
+
+  //   // clean slate
+  //   ScrollTrigger.getAll().forEach(t => t.kill());
+  //   sizeCanvas();
+
+  //   loadImages().then(() => {
+  //     // draw first available
+  //     let first = 0;
+  //     for (let i = 0; i < frameCount; i++) {
+  //       if (images[i]?.complete && images[i].naturalWidth) { first = i; break; }
+  //     }
+  //     frame.current = first;
+  //     draw();
+  //     // after you resolve useWindow / scrollerEl and before creating triggers
+  //     const vh = useWindow ? window.innerHeight : scrollerEl!.clientHeight;
+  //     const realScrollable = sectionEl.offsetHeight - vh;           // px the section can actually scroll
+  //     const VIRTUAL_TOTAL_PX = Math.max(0, realScrollable * SCROLL_MULTIPLIER);
+
+  //     // ScrollTrigger (now pointing at the correct scroller)
+  //     const stCfg: any = {
+  //       trigger: sectionEl,
+  //       start: 'top top',
+  //       end: () => '+=' + VIRTUAL_TOTAL_PX,   // exact same virtual distance
+  //       scrub: true,
+  //       onUpdate: (self: ScrollTrigger) => {
+  //         const idx = Math.min(frameCount - 1, Math.floor(self.progress * (frameCount - 1)));
+  //         if (idx !== frame.current) { frame.current = idx; draw(); }
+  //       },
+  //       onLeave: () => {                       // guarantee last frame if user blasts past
+  //         frame.current = frameCount - 1;
+  //         draw();
+  //       },
+  //       onLeaveBack: () => {                   // and first frame on reverse
+  //         frame.current = 0;
+  //         draw();
+  //       },
+  //     };
+  //     if (!useWindow) stCfg.scroller = scrollerEl;
+  //     ScrollTrigger.create(stCfg);
+
+  //     // manual fallback (also drives frames; harmless to run alongside ST)
+  //     const onScroll = () => {
+  //       const p = Math.min(1, Math.max(0, manualProgress()));
+  //       const eased = p; // you can apply easing if you like
+  //       const idx = (eased > 0.995) ? (frameCount - 1) : Math.floor(eased * (frameCount - 1));
+  //       if (idx !== frame.current) {
+  //         frame.current = idx;
+  //         draw();
+  //       }
+  //     };
+
+  //     const scrollTarget: any = useWindow ? window : scrollerEl!;
+  //     scrollTarget.addEventListener('scroll', onScroll, { passive: true });
+
+  //     const onResize = () => {
+  //       sizeCanvas();
+  //       draw();
+  //       ScrollTrigger.refresh();
+  //       onScroll();
+  //     };
+  //     window.addEventListener('resize', onResize);
+
+  //     // initial sync
+  //     ScrollTrigger.refresh();
+  //     onScroll();
+
+  //     return () => {
+  //       ScrollTrigger.getAll().forEach(t => t.kill());
+  //       scrollTarget.removeEventListener('scroll', onScroll);
+  //       window.removeEventListener('resize', onResize);
+  //     };
+  //   });
+
+  //   // eslint-disable-next-line react-hooks/exhaustive-deps
+  // }, []);
 
 
 
@@ -943,11 +1435,12 @@ const LandingPage: React.FC = () => {
     <LandingWrapper>
       <FloatingNav>
         <NavBrand>
-          <BrandMark>AI</BrandMark>
+          {/* <BrandMark>AI</BrandMark> */}
           ArrowAI Studio
         </NavBrand>
         <NavLinks>
           <NavLink onClick={() => scrollToSection('features')}>Features</NavLink>
+          <NavLink onClick={() => scrollToSection('case-studies')}>Case Studies</NavLink>
           <NavLink onClick={() => scrollToSection('demo')}>Demo</NavLink>
           <NavLink onClick={() => scrollToSection('cta')}>Contact</NavLink>
         </NavLinks>
@@ -964,30 +1457,158 @@ const LandingPage: React.FC = () => {
         <DotGrid />
         <DotCanvasOverlay />
         <HeroContent>
-          <Badge>
-            <Sparkles size={14} />
-            Auditable AI Platform
-          </Badge>
+          {/* <Badge>
+      <Sparkles size={14} />
+      Auditable AI Platform
+    </Badge> */}
           <HeroTitle>
-            AI you can trust, prove, and replay.
+            AI Consulting <br />Made Effortless
           </HeroTitle>
           <HeroSubtitle>
-            The trust layer for intelligent systems — recording every reasoning step, dataset, and output so decisions are explainable, defensible and most importantly, auditable.
+            Multi-agent AI system that researches, analyzes, and delivers
+            publication-ready reports with verified data and full audit trails.
           </HeroSubtitle>
           <HeroButtons>
             <PrimaryButton onClick={launchWorkspace}>
               Get Started
               <ArrowRight size={20} />
             </PrimaryButton>
-            <OutlineButton onClick={() => scrollToSection('demo')}>
-              Live Demo
+            <OutlineButton onClick={() => scrollToSection('features')}>
+              Demo
               <Play size={20} />
             </OutlineButton>
           </HeroButtons>
+          <HeroFeatureBoxes>
+            <FeatureBox>
+              <FeatureBoxTitle>Auditable</FeatureBoxTitle>
+              <FeatureBoxDescription>
+                Track every decision and insight with full transparency
+              </FeatureBoxDescription>
+            </FeatureBox>
+            <FeatureBox>
+              <FeatureBoxTitle>Fact-Checked</FeatureBoxTitle>
+              <FeatureBoxDescription>
+                Verified information backed by reliable sources
+              </FeatureBoxDescription>
+            </FeatureBox>
+            <FeatureBox>
+              <FeatureBoxTitle>Data-Driven</FeatureBoxTitle>
+              <FeatureBoxDescription>
+                Insights powered by comprehensive analysis
+              </FeatureBoxDescription>
+            </FeatureBox>
+          </HeroFeatureBoxes>
         </HeroContent>
       </HeroSection>
 
-      <VideoFeaturesSection ref={sectionRef} id="features">
+      <VideoShowcaseSection id="features">
+        <SectionHeader>
+          <SectionTitle>Works like a team</SectionTitle>
+          {/* <SectionSubtitle>
+            Specialized AI agents collaborate seamlessly to deliver high-quality, data-driven reports and analyses.
+          </SectionSubtitle> */}
+        </SectionHeader>
+
+        <ShowcaseContainer>
+          <VideoContainer>
+            <VideoPlayer
+              ref={videoRef}
+              controls
+              autoPlay
+              muted
+              loop
+            >
+              <source src="/videos/features-video.mp4" type="video/mp4" />
+              Your browser does not support the video tag.
+            </VideoPlayer>
+          </VideoContainer>
+
+          <FeaturesColumn>
+            {features.map((feature, index) => (
+              <FeatureShowcaseCard
+                key={index}
+                className={activeFeatureIndex === index ? 'active' : ''}
+                onClick={() => {
+                  if (videoRef.current) {
+                    videoRef.current.currentTime = feature.startTime;
+                  }
+                }}
+                style={{ cursor: 'pointer' }}
+              >
+                <FeatureNumber>{index + 1}</FeatureNumber>
+                <FeatureIcon>{feature.icon}</FeatureIcon>
+                <FeatureTitle>{feature.title}</FeatureTitle>
+                <FeatureDescription>{feature.description}</FeatureDescription>
+              </FeatureShowcaseCard>
+            ))}
+          </FeaturesColumn>
+        </ShowcaseContainer>
+      </VideoShowcaseSection>
+
+      <CaseStudiesSection id="case-studies">
+        <SectionHeader>
+          <SectionTitle>Why Auditability Matters</SectionTitle>
+        </SectionHeader>
+
+        <CaseStudiesGrid>
+          {caseStudies.map((study, index) => (
+            <CaseStudyCard key={index}>
+              <CaseStudyLabel>{study.label}</CaseStudyLabel>
+              <CaseStudyTitle>{study.title}</CaseStudyTitle>
+              <CaseStudyDescription>{study.description}</CaseStudyDescription>
+              <CaseStudyImpact>
+                <ImpactLabel>Impact</ImpactLabel>
+                <ImpactValue>{study.impact}</ImpactValue>
+              </CaseStudyImpact>
+
+              {study.links && study.links.length > 0 && (
+                <CaseStudyLinks>
+                  <LinksLabel>References</LinksLabel>
+                  <LinksList>
+                    {study.links.map((link, linkIndex) => (
+                      <CaseStudyLink
+                        key={linkIndex}
+                        href={link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <ExternalLink size={14} />
+                        <LinkText>{new URL(link).hostname.replace('www.', '')}</LinkText>
+                      </CaseStudyLink>
+                    ))}
+                  </LinksList>
+                </CaseStudyLinks>
+              )}
+            </CaseStudyCard>
+          ))}
+        </CaseStudiesGrid>
+
+        <SolutionShowcase>
+          <SolutionContent>
+            <SolutionTitle>ArrowAI Solves This</SolutionTitle>
+            <SolutionSubtitle>
+              Built-in auditability from the ground up. Every decision, every step, every output —
+              fully traceable, explainable, and defensible.
+            </SolutionSubtitle>
+
+            <SolutionFeaturesGrid>
+              {solutionFeatures.map((feature, index) => (
+                <SolutionFeatureBox key={index}>
+                  <SolutionFeatureIcon>{feature.icon}</SolutionFeatureIcon>
+                  <SolutionFeatureTitle>{feature.title}</SolutionFeatureTitle>
+                  <SolutionFeatureDescription>{feature.description}</SolutionFeatureDescription>
+                </SolutionFeatureBox>
+              ))}
+            </SolutionFeaturesGrid>
+          </SolutionContent>
+        </SolutionShowcase>
+      </CaseStudiesSection>
+
+      {/* <VideoFeaturesSection
+        ref={sectionRef}
+        id="features"
+        style={{ height: `${900 * SCROLL_MULTIPLIER}vh` }}   // <-- override the 300vh
+      >
         <StickyContainer>
           <VideoCanvas ref={canvasRef} />
           <FeatureTextOverlay>
@@ -1000,7 +1621,7 @@ const LandingPage: React.FC = () => {
             ))}
           </FeatureTextOverlay>
         </StickyContainer>
-      </VideoFeaturesSection>
+      </VideoFeaturesSection> */}
 
       <DemoSection id="demo">
         <SectionHeader>

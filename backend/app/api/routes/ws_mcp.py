@@ -34,7 +34,7 @@ CODE_AGENT_MCP_WS = os.environ.get("CODE_AGENT_MCP_WS", "http://localhost:5000/m
 RESEARCH_AGENT_MCP_WS = os.environ.get("RESEARCH_AGENT_MCP_WS", "http://localhost:5001/mcp/research_agent")
 ARTIFACT_AGENT_MCP_WS = os.environ.get("ARTIFACT_AGENT_MCP_WS", "http://localhost:5002/mcp/artifacts")
 NARRATIVE_AGENT_MCP_WS = os.environ.get("NARRATIVE_AGENT_MCP_WS", "http://localhost:5003/mcp/narrative_agent")
-PRESENTATION_AGENT_MCP_WS = os.environ.get("PRESENTATION_AGENT_MCP_WS", "http://localhost:5004/mcp/presentation_agent")
+# PRESENTATION_AGENT_MCP_WS = os.environ.get("PRESENTATION_AGENT_MCP_WS", "http://localhost:5004/mcp/presentation_agent")
 
 s3c = S3Client(
     bucket_name=DEFAULT_BUCKET,
@@ -81,10 +81,10 @@ async def _ensure_tools():
                     "url": NARRATIVE_AGENT_MCP_WS,
                     "transport": "streamable_http",
                 },
-                "presentation_agent": {
-                    "url": PRESENTATION_AGENT_MCP_WS,
-                    "transport": "streamable_http",
-                },
+                # "presentation_agent": {
+                #     "url": PRESENTATION_AGENT_MCP_WS,
+                #     "transport": "streamable_http",
+                # },
             }
         )
         _tools = await _mcp_client.get_tools()
