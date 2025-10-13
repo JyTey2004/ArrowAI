@@ -10,11 +10,21 @@ import {
   Play,
   ShieldCheck,
   Sparkles,
+  Zap,
   Globe,
+  Lock,
+  ExternalLink,
   Divide,
   FileChartLine,
   SquareCheck,
-  ExternalLink
+  Twitter,
+  Linkedin,
+  Github,
+  Mail,
+  Dot,
+  Upload,
+  FileUp,
+  CheckCircle2,
 } from 'lucide-react';
 import { useChat } from '../../contexts/ChatContext';
 import gsap from 'gsap';
@@ -250,14 +260,15 @@ const FeatureBoxDescription = styled.div`
   letter-spacing: -0.2px;
 `;
 
-const DotCanvas = styled.canvas`
+const DotCanvas = styled.canvas<{ $zIndex?: number }>`
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
-  z-index: 1;
+  z-index: ${props => props.$zIndex || 1};
 `;
+
 
 const DotCanvasOverlay = styled.div`
   position: absolute;
@@ -512,39 +523,20 @@ const FeatureDescription = styled.p`
 `;
 
 const DemoSection = styled(FullWidthSection)`
-  background: #f9fafb;
-`;
-
-const DemoContainer = styled.div`
-  max-width: 1600px;
-  margin: 0 auto;
-`;
-
-const DemoViewport = styled.div`
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
-  border-radius: 20px;
+  position: relative;
+  background: linear-gradient(135deg, #1a1a2e 0%, #2d2d44 100%);
   overflow: hidden;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.08);
 `;
 
-const DemoToolbar = styled.div`
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 20px 30px;
-  background: #f9fafb;
-  border-bottom: 1px solid #e5e7eb;
-  background: rgba(255, 255, 255, 0.05);
-  border-bottom: 1px solid rgba(99, 102, 241, 0.2);
-`;
-
-const ToolbarTitle = styled.div`
-  font-size: 14px;
-  font-weight: 600;
-  color: #1a1a2e;
-  font-family: inherit;
-  letter-spacing: -0.2px;
+// Add these styled component variants
+const SectionHeaderLight = styled(SectionHeader)`
+  ${SectionTitle} {
+    color: white;
+  }
+  
+  ${SectionSubtitle} {
+    color: rgba(255, 255, 255, 0.85);
+  }
 `;
 
 const LiveTag = styled.div`
@@ -562,6 +554,39 @@ const LiveTag = styled.div`
   letter-spacing: -0.1px;
 `;
 
+const DemoContainer = styled.div`
+  position: relative;
+  z-index: 1;
+  max-width: 1600px;
+  margin: 0 auto 80px;
+`;
+
+const DemoViewport = styled.div`
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+`;
+
+const DemoToolbar = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 30px;
+  background: rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+`;
+
+const ToolbarTitle = styled.div`
+  font-size: 14px;
+  font-weight: 600;
+  color: white;
+  font-family: inherit;
+  letter-spacing: -0.2px;
+`;
+
 const DemoGrid = styled.div`
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -571,30 +596,177 @@ const DemoGrid = styled.div`
 
 const DemoCard = styled.div`
   padding: 24px;
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 12px;
+  transition: all 0.3s ease;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(99, 102, 241, 0.4);
+    transform: translateY(-5px);
+  }
 `;
 
 const DemoCardTitle = styled.div`
   font-size: 15px;
   font-weight: 600;
-  color: #1a1a2e;
+  color: white;
   margin-bottom: 12px;
   font-family: inherit;
   letter-spacing: -0.3px;
 `;
 
+const DemoPromptsSection = styled.div`
+  margin-bottom: 60px;
+  position: relative;
+  z-index: 1;
+`;
+
+const PromptsGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+  max-width: 1600px;
+  margin: 0 auto;
+`;
+
+const PromptCard = styled.div`
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 16px;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  position: relative;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(99, 102, 241, 0.5);
+    transform: translateY(-5px);
+    box-shadow: 0 10px 30px rgba(99, 102, 241, 0.2);
+  }
+`;
+
+const PromptHeader = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+`;
+
+const PromptCategory = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6366f1;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+`;
+
+const PromptTime = styled.div`
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 500;
+`;
+
+const PromptText = styled.div`
+  font-size: 15px;
+  color: white;
+  line-height: 1.6;
+  margin-bottom: 16px;
+  font-weight: 500;
+`;
+
+const PromptFooter = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+`;
+
+const UploadBadge = styled.div<{ $required: boolean }>`
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: ${props => props.$required
+    ? 'rgba(245, 158, 11, 0.15)'
+    : 'rgba(34, 197, 94, 0.15)'};
+  border: 1px solid ${props => props.$required
+    ? 'rgba(245, 158, 11, 0.3)'
+    : 'rgba(34, 197, 94, 0.3)'};
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: ${props => props.$required ? '#fbbf24' : '#4ade80'};
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+`;
+
+const UploadType = styled.span`
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 500;
+`;
+
+const TryButton = styled.button`
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: rgba(99, 102, 241, 0.2);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  border-radius: 8px;
+  color: #a5b4fc;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+
+  &:hover {
+    background: rgba(99, 102, 241, 0.3);
+    border-color: rgba(99, 102, 241, 0.6);
+    color: white;
+  }
+`;
+
+const DemoSectionTitle = styled.h3`
+  font-size: 24px;
+  font-weight: 600;
+  color: white;
+  margin-bottom: 16px;
+  text-align: center;
+  font-family: inherit;
+  letter-spacing: -0.5px;
+`;
+
+const DemoSectionSubtitle = styled.p`
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.7);
+  margin-bottom: 40px;
+  text-align: center;
+  max-width: 700px;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.6;
+`;
+
 const DemoCardBody = styled.p`
   font-size: 14px;
-  color: #6b7280;
+  color: rgba(255, 255, 255, 0.7);
   line-height: 1.6;
   font-family: inherit;
   letter-spacing: -0.2px;
 `;
 
 const CTASection = styled(FullWidthSection)`
-  background: linear-gradient(135deg, #1a1a2e 0%, #2d2d44 100%);
+  position: relative;
+  background: #ffffff;
 `;
 
 const CTAContent = styled.div`
@@ -605,16 +777,16 @@ const CTAContent = styled.div`
 
 const CTATitle = styled.h2`
   font-size: clamp(36px, 5vw, 56px);
-  font-weight: 700;
+  font-weight: 500;
   margin-bottom: 24px;
-  color: white;
+  color: #1a1a2e;
   font-family: 'Casual', 'Inter', 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
-  letter-spacing: -1.5px;
+  letter-spacing: 1.5px;
 `;
 
 const CTASubtitle = styled.p`
   font-size: 19px;
-  color: rgba(255, 255, 255, 0.85);
+  color: #6b7280;
   line-height: 1.7;
   margin-bottom: 40px;
   font-family: inherit;
@@ -628,28 +800,8 @@ const CTAButtons = styled.div`
   flex-wrap: wrap;
 `;
 
-const WhiteButton = styled(PrimaryButton)`
-  background: white;
-  color: #1a1a2e;
-
-  &:hover {
-    background: #f9fafb;
-    box-shadow: 0 10px 30px rgba(255, 255, 255, 0.2);
-  }
-`;
-
-const TransparentButton = styled(PrimaryButton)`
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.25);
-
-  &:hover {
-    background: rgba(255, 255, 255, 0.15);
-    border-color: rgba(255, 255, 255, 0.4);
-  }
-`;
-
 const VideoShowcaseSection = styled(FullWidthSection)`
-  background: #ffffff;
+background: linear-gradient(180deg, #f9fafb 0%, #ffffff 100%);
   padding: 120px 60px;
 
   @media (max-width: 968px) {
@@ -887,7 +1039,7 @@ const ImpactValue = styled.div`
 `;
 
 const SolutionShowcase = styled.div`
-  max-width: 1200px;
+  max-width: 1400px;
   margin: 0 auto;
   padding: 60px 40px;
   background: linear-gradient(135deg, #1a1a2e 0%, #2d2d44 100%);
@@ -985,7 +1137,173 @@ const SolutionFeatureDescription = styled.div`
   letter-spacing: -0.2px;
 `;
 
-const DotGrid: React.FC = () => {
+const Footer = styled.footer`
+  position: relative;
+  width: 100%;
+  padding: 80px 60px 40px;
+  background: #1a1a2e;
+  color: white;
+  overflow: hidden;
+
+  @media (max-width: 768px) {
+    padding: 60px 24px 32px;
+  }
+`;
+
+const FooterBackground = styled.div`
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: clamp(80px, 15vw, 200px);
+  font-weight: 700;
+  font-family: 'Casual', 'Inter', 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  color: rgba(255, 255, 255, 0.03);
+  white-space: nowrap;
+  letter-spacing: -0.02em;
+  user-select: none;
+  pointer-events: none;
+  z-index: 0;
+`;
+
+const FooterContent = styled.div`
+  position: relative;
+  z-index: 1;
+  max-width: 1400px;
+  margin: 0 auto;
+`;
+
+const FooterGrid = styled.div`
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  gap: 60px;
+  margin-bottom: 60px;
+
+  @media (max-width: 968px) {
+    grid-template-columns: 1fr 1fr;
+    gap: 40px;
+  }
+
+  @media (max-width: 640px) {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+`;
+
+const FooterBrand = styled.div``;
+
+const FooterBrandLogo = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+`;
+
+const FooterBrandMark = styled.div`
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: 700;
+  font-size: 18px;
+`;
+
+const FooterBrandName = styled.div`
+  font-size: 20px;
+  font-weight: 600;
+  color: white;
+  font-family: inherit;
+  letter-spacing: 0.5px;
+`;
+
+const FooterBrandDescription = styled.p`
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.6);
+  line-height: 1.7;
+  max-width: 300px;
+`;
+
+const FooterColumn = styled.div``;
+
+const FooterColumnTitle = styled.h4`
+  font-size: 14px;
+  font-weight: 600;
+  color: white;
+  margin-bottom: 20px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+`;
+
+const FooterLinks = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+`;
+
+const FooterLink = styled.a`
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.6);
+  text-decoration: none;
+  transition: color 0.3s ease;
+  cursor: pointer;
+
+  &:hover {
+    color: #6366f1;
+  }
+`;
+
+const FooterBottom = styled.div`
+  padding-top: 32px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+
+  @media (max-width: 640px) {
+    flex-direction: column;
+    text-align: center;
+  }
+`;
+
+const FooterCopyright = styled.div`
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.5);
+`;
+
+const FooterSocial = styled.div`
+  display: flex;
+  gap: 16px;
+`;
+
+const SocialLink = styled.a`
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.6);
+  transition: all 0.3s ease;
+  cursor: pointer;
+
+  &:hover {
+    background: rgba(99, 102, 241, 0.2);
+    color: #6366f1;
+    transform: translateY(-2px);
+  }
+`;
+
+const DotGrid: React.FC<{ variant?: 'full' | 'semicircles'; zIndex?: number }> = ({
+  variant = 'full',
+  zIndex = 1
+}) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -1014,14 +1332,44 @@ const DotGrid: React.FC = () => {
       ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
 
       dots.length = 0;
-      for (let x = -spacing; x < clientWidth + spacing; x += spacing) {
-        for (let y = -spacing; y < clientHeight + spacing; y += spacing) {
-          dots.push({
-            x,
-            y,
-            baseSize: 1 + Math.random() * 1,
-            phase: Math.random() * Math.PI * 2,
-          });
+
+      if (variant === 'semicircles') {
+        // Create dots only on left and right semicircles
+        const centerY = clientHeight / 2;
+        const radius = clientHeight / 2;
+
+        for (let x = -spacing; x < clientWidth + spacing; x += spacing) {
+          for (let y = -spacing; y < clientHeight + spacing; y += spacing) {
+            // Left semicircle (centered at left edge)
+            const distFromLeftCenter = Math.sqrt(Math.pow(x, 2) + Math.pow(y - centerY, 2));
+
+            // Right semicircle (centered at right edge)
+            const distFromRightCenter = Math.sqrt(
+              Math.pow(x - clientWidth, 2) + Math.pow(y - centerY, 2)
+            );
+
+            // Only add dots within the semicircle radius
+            if (distFromLeftCenter < radius || distFromRightCenter < radius) {
+              dots.push({
+                x,
+                y,
+                baseSize: 1 + Math.random() * 1,
+                phase: Math.random() * Math.PI * 2,
+              });
+            }
+          }
+        }
+      } else {
+        // Full canvas coverage (original behavior)
+        for (let x = -spacing; x < clientWidth + spacing; x += spacing) {
+          for (let y = -spacing; y < clientHeight + spacing; y += spacing) {
+            dots.push({
+              x,
+              y,
+              baseSize: 1 + Math.random() * 1,
+              phase: Math.random() * Math.PI * 2,
+            });
+          }
         }
       }
     };
@@ -1057,10 +1405,12 @@ const DotGrid: React.FC = () => {
       cancelAnimationFrame(animationFrame);
       window.removeEventListener('resize', resizeCanvas);
     };
-  }, []);
+  }, [variant]);
 
-  return <DotCanvas ref={canvasRef} />;
+  return <DotCanvas ref={canvasRef} $zIndex={zIndex} />;
 };
+
+
 
 const stats = [
   { value: '4+', label: 'Specialist Agents' },
@@ -1121,18 +1471,51 @@ const features = [
   }
 ];
 
-const demoHighlights = [
+const demoPrompts = [
   {
-    title: 'Artifact Timeline',
-    body: 'Track every generated asset—code, documents, visualizations—with full version history and instant rollback capabilities.'
+    category: "Market Research",
+    prompt: "Analyze the enterprise AI market and create a competitive landscape report with top 10 players",
+    estimatedTime: "5 min",
+    requiresUpload: false,
+    icon: <Globe size={18} />
   },
   {
-    title: 'Live Execution Monitor',
-    body: 'Observe agent activities in real-time with detailed logs, performance metrics, and resource utilization insights.'
+    category: "Financial Analysis",
+    prompt: "Compare our Q4 sales performance vs. competitors using uploaded financial data",
+    estimatedTime: "3 min",
+    requiresUpload: true,
+    uploadType: "CSV, XLSX",
+    icon: <BarChart3 size={18} />
   },
   {
-    title: 'Collaborative Workspace',
-    body: 'Review, approve, and refine agent outputs with contextual feedback loops and team annotation tools.'
+    category: "Customer Insights",
+    prompt: "Analyze customer usage patterns and create segmentation report from uploaded data",
+    estimatedTime: "6 min",
+    requiresUpload: true,
+    uploadType: "CSV, JSON",
+    icon: <BrainCircuit size={18} />
+  },
+  {
+    category: "Due Diligence",
+    prompt: "Research GDPR and CCPA compliance requirements for our healthcare AI product",
+    estimatedTime: "7 min",
+    requiresUpload: false,
+    icon: <ShieldCheck size={18} />
+  },
+  {
+    category: "Strategy Planning",
+    prompt: "Develop go-to-market strategy with pricing analysis for new AI product launch",
+    estimatedTime: "8 min",
+    requiresUpload: false,
+    icon: <Sparkles size={18} />
+  },
+  {
+    category: "Competitive Intel",
+    prompt: "Analyze competitor product features and pricing from uploaded market research data",
+    estimatedTime: "4 min",
+    requiresUpload: true,
+    uploadType: "PDF, DOCX",
+    icon: <Zap size={18} />
   }
 ];
 
@@ -1442,7 +1825,6 @@ const LandingPage: React.FC = () => {
           <NavLink onClick={() => scrollToSection('features')}>Features</NavLink>
           <NavLink onClick={() => scrollToSection('case-studies')}>Case Studies</NavLink>
           <NavLink onClick={() => scrollToSection('demo')}>Demo</NavLink>
-          <NavLink onClick={() => scrollToSection('cta')}>Contact</NavLink>
         </NavLinks>
         <NavActions>
           <SecondaryButton onClick={goToDashboard}>Dashboard</SecondaryButton>
@@ -1454,7 +1836,7 @@ const LandingPage: React.FC = () => {
       </FloatingNav>
 
       <HeroSection>
-        <DotGrid />
+        <DotGrid variant="full" />
         <DotCanvasOverlay />
         <HeroContent>
           {/* <Badge>
@@ -1624,13 +2006,67 @@ const LandingPage: React.FC = () => {
       </VideoFeaturesSection> */}
 
       <DemoSection id="demo">
-        <SectionHeader>
+        <DotGrid variant="semicircles" zIndex={0} />
+
+        <SectionHeaderLight>
           <SectionTitle>See It In Action</SectionTitle>
-          <SectionSubtitle>
-            Experience the ArrowAI platform with our interactive workspace demonstration.
-          </SectionSubtitle>
-        </SectionHeader>
-        <DemoContainer>
+        </SectionHeaderLight>
+
+        {/* Example Prompts */}
+        <DemoPromptsSection>
+          <DemoSectionTitle>Example Consulting Prompts</DemoSectionTitle>
+          <DemoSectionSubtitle>
+            Click any prompt to see how ArrowAI orchestrates multiple agents, researches data, and delivers comprehensive results
+          </DemoSectionSubtitle>
+
+          <PromptsGrid>
+            {demoPrompts.map((prompt, index) => (
+              <PromptCard key={index} onClick={launchWorkspace}>
+                <PromptHeader>
+                  <PromptCategory>
+                    {prompt.icon}
+                    {prompt.category}
+                  </PromptCategory>
+                  <PromptTime>{prompt.estimatedTime}</PromptTime>
+                </PromptHeader>
+
+                <PromptText>{prompt.prompt}</PromptText>
+
+                <PromptFooter>
+                  <UploadBadge $required={prompt.requiresUpload}>
+                    {prompt.requiresUpload ? (
+                      <>
+                        <FileUp size={12} />
+                        Data Upload
+                        {prompt.uploadType && (
+                          <UploadType>· {prompt.uploadType}</UploadType>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 size={12} />
+                        No Upload
+                      </>
+                    )}
+                  </UploadBadge>
+
+                  <TryButton>
+                    Try Now
+                    <Play size={14} />
+                  </TryButton>
+                </PromptFooter>
+              </PromptCard>
+            ))}
+          </PromptsGrid>
+        </DemoPromptsSection>
+
+        {/* Live Demo Viewport */}
+        {/* <DemoContainer>
+          <DemoSectionTitle>Live Workspace Demo</DemoSectionTitle>
+          <DemoSectionSubtitle>
+            See how ArrowAI tracks every step of the process
+          </DemoSectionSubtitle>
+
           <DemoViewport>
             <DemoToolbar>
               <ToolbarTitle>ArrowAI Workspace · Live Demo</ToolbarTitle>
@@ -1648,23 +2084,99 @@ const LandingPage: React.FC = () => {
               ))}
             </DemoGrid>
           </DemoViewport>
-        </DemoContainer>
+        </DemoContainer> */}
       </DemoSection>
 
-      <CTASection id="cta">
+      <CTASection id="get-started">
         <CTAContent>
+          <CTATitle>Ready to Get Started?</CTATitle>
+          <CTASubtitle>
+            Join teams building trustworthy AI systems with complete auditability and transparency.
+          </CTASubtitle>
           <CTAButtons>
-            <WhiteButton onClick={launchWorkspace}>
-              Get Started Free
-              <ArrowRight size={18} />
-            </WhiteButton>
-            <TransparentButton onClick={goToDashboard}>
+            <PrimaryButton onClick={launchWorkspace}>
+              Launch Workspace
+              <ArrowRight size={20} />
+            </PrimaryButton>
+            <OutlineButton onClick={() => { }}>
               Schedule Demo
-              <MessageSquare size={18} />
-            </TransparentButton>
+              <MessageSquare size={20} />
+            </OutlineButton>
           </CTAButtons>
         </CTAContent>
       </CTASection>
+
+      <Footer>
+        <FooterBackground>ArrowAI</FooterBackground>
+        <FooterContent>
+          <FooterGrid>
+            <FooterBrand>
+              <FooterBrandLogo>
+                <FooterBrandMark>AI</FooterBrandMark>
+                <FooterBrandName>ArrowAI Studio</FooterBrandName>
+              </FooterBrandLogo>
+              <FooterBrandDescription>
+                The trust layer for intelligent systems — recording every reasoning step,
+                dataset, and output so decisions are explainable and auditable.
+              </FooterBrandDescription>
+            </FooterBrand>
+
+            <FooterColumn>
+
+            </FooterColumn>
+
+            <FooterColumn>
+              <FooterColumnTitle>Product</FooterColumnTitle>
+              <FooterLinks>
+                <FooterLink onClick={() => scrollToSection('features')}>Features</FooterLink>
+                <FooterLink onClick={() => scrollToSection('demo')}>Demo</FooterLink>
+                <FooterLink onClick={() => scrollToSection('case-studies')}>Case Studies</FooterLink>
+                <FooterLink onClick={launchWorkspace}>Get Started</FooterLink>
+              </FooterLinks>
+            </FooterColumn>
+
+            <FooterColumn>
+              <FooterColumnTitle>Company</FooterColumnTitle>
+              <FooterLinks>
+                <FooterLink href="#">About</FooterLink>
+                <FooterLink href="#">Blog</FooterLink>
+                <FooterLink href="#">Careers</FooterLink>
+                <FooterLink href="#">Contact</FooterLink>
+              </FooterLinks>
+            </FooterColumn>
+
+            {/* <FooterColumn>
+              <FooterColumnTitle>Legal</FooterColumnTitle>
+              <FooterLinks>
+                <FooterLink href="#">Privacy Policy</FooterLink>
+                <FooterLink href="#">Terms of Service</FooterLink>
+                <FooterLink href="#">Security</FooterLink>
+                <FooterLink href="#">Compliance</FooterLink>
+              </FooterLinks>
+            </FooterColumn> */}
+          </FooterGrid>
+
+          <FooterBottom>
+            <FooterCopyright>
+              © {new Date().getFullYear()} ArrowAI Studio. All rights reserved.
+            </FooterCopyright>
+            <FooterSocial>
+              <SocialLink href="#" target="_blank" rel="noopener noreferrer">
+                <Twitter size={18} />
+              </SocialLink>
+              <SocialLink href="#" target="_blank" rel="noopener noreferrer">
+                <Linkedin size={18} />
+              </SocialLink>
+              <SocialLink href="#" target="_blank" rel="noopener noreferrer">
+                <Github size={18} />
+              </SocialLink>
+              <SocialLink href="#" target="_blank" rel="noopener noreferrer">
+                <Mail size={18} />
+              </SocialLink>
+            </FooterSocial>
+          </FooterBottom>
+        </FooterContent>
+      </Footer>
     </LandingWrapper>
   );
 };
